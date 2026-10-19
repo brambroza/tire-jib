@@ -1,12 +1,45 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { Icon } from "@iconify/react";
+import { resolvePriceGroupChip } from "@/lib/product/card-model.mjs";
+
+/** Thai fallback labels for known price group codes, used when the group has no name. */
+const GROUP_LABELS = {
+  general: "ราคาทั่วไป",
+};
+
+/**
+ * Convert a price group object from the API into a human-readable label.
+ * Prefers customer_groups.name, then a known Thai label, then the raw code.
+ * @param {{ code?: string, name?: string } | null | undefined} group
+ * @returns {string}
+ */
+function formatGroupLabel(group) {
+  const name = group?.name ? String(group.name).trim() : "";
+  if (name) return name;
+  const code = group?.code ? String(group.code).trim() : "";
+  if (!code) return "ยังไม่ได้กำหนดกลุ่ม";
+  return GROUP_LABELS[code.toLowerCase()] || code;
+}
+
+/**
+ * Pick the badge tone and icon for a price group, matching the product card chip:
+ * general = grey + user icon, member = green + user icon, dealer = black/gold + crown.
+ * @param {{ code?: string, name?: string } | null | undefined} group
+ * @returns {{ tone: "general" | "member" | "dealer", icon: string }}
+ */
+function resolveGroupBadge(group) {
+  const tone = resolvePriceGroupChip(group)?.tone || "general";
+  return { tone, icon: tone === "dealer" ? "solar:crown-bold" : "solar:user-id-bold" };
+}
 
 export default function ProfileForm() {
   const [status, setStatus] = useState("");
   const [statusTone, setStatusTone] = useState("info");
   const [isUnauthorized, setIsUnauthorized] = useState(false);
   const [lastLoginAt, setLastLoginAt] = useState("");
+  const [customerGroup, setCustomerGroup] = useState(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState({
@@ -35,6 +68,7 @@ export default function ProfileForm() {
           profile_image_url: profile.profile_image_url || "",
         });
         setLastLoginAt(profile.last_login_at || "");
+        setCustomerGroup(profile.customer_group || null);
       })
       .catch(() => {
         if (active) {
@@ -124,9 +158,24 @@ export default function ProfileForm() {
         <div className="profile-highlight">
           <div className="profile-highlight-name">{form.display_name || "สมาชิก"}</div>
           <div className="profile-highlight-meta">{form.phone || "ยังไม่ได้เพิ่มเบอร์โทร"}</div>
+          <div
+            className="profile-group-badge"
+            data-tone={resolveGroupBadge(customerGroup).tone}
+            title={customerGroup?.code || ""}
+          >
+            <Icon icon={resolveGroupBadge(customerGroup).icon} aria-hidden="true" />
+            {formatGroupLabel(customerGroup)}
+          </div>
         </div>
 
         <div className="profile-overview-list">
+          <div className="profile-overview-item">
+            <span>กลุ่มราคาสมาชิก</span>
+            <strong className="profile-group-value" data-tone={resolveGroupBadge(customerGroup).tone}>
+              <Icon icon={resolveGroupBadge(customerGroup).icon} aria-hidden="true" />
+              {formatGroupLabel(customerGroup)}
+            </strong>
+          </div>
           <div className="profile-overview-item">
             <span>เข้าสู่ระบบล่าสุด</span>
             <strong>

@@ -6,6 +6,7 @@ import ProductDetailAddToCartButton from "@/components/ProductDetailAddToCartBut
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { formatTHB } from "@/lib/utils/format";
 import { getSiteAndGroupId, getProductBadges } from "@/lib/supabase/queries";
+import { buildPriceGroupIds } from "@/lib/pricing/customer-group";
 
 export const metadata = {
   title: "รายละเอียดสินค้า — สวัสดี จิ๊บจิ๊บ",
@@ -125,23 +126,32 @@ export default async function ProductDetailPage({ params }) {
   const id = resolvedParams?.id;
 
   const supabase = await createSupabaseServerClient();
-  const { siteId, groupId } = await getSiteAndGroupId(supabase);
+  const { siteId, groupId, generalGroupId } = await getSiteAndGroupId(supabase);
 
   if (!id || !siteId || !groupId) {
     notFound();
   }
 
-  const { data: sku, error } = await supabase
-    .rpc("get_product_detail", {
-      p_sku_id: id,
-      p_site_id: siteId,
-      p_group_id: groupId,
-    })
-    .maybeSingle();
+  // Try the customer's price group first, then fall back to the general group.
+  let sku = null;
+  for (const priceGroupId of buildPriceGroupIds(groupId, generalGroupId)) {
+    const { data, error } = await supabase
+      .rpc("get_product_detail", {
+        p_sku_id: id,
+        p_site_id: siteId,
+        p_group_id: priceGroupId,
+      })
+      .maybeSingle();
 
-  if (error) {
-    console.error("get_product_detail error:", error);
-    notFound();
+    if (error) {
+      console.error("get_product_detail error:", error);
+      notFound();
+    }
+
+    if (data) {
+      sku = data;
+      break;
+    }
   }
 
   if (!sku) {

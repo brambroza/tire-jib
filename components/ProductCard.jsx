@@ -2,77 +2,77 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { Icon } from "@iconify/react";
+import { buildProductCardModel, resolvePriceGroupChip, splitPrice } from "@/lib/product/card-model.mjs";
+import { playAddToCartFeedback, useProductCardMotion } from "@/lib/motion/useProductCardMotion";
 
-export default function ProductCard({ product }) {
+/** How long the "added" check state stays visible on the buy button. */
+const ADDED_FEEDBACK_MS = 900;
+
+/**
+ * Dispatch a snackbar event consumed by `CartSnackbar`.
+ *
+ * @param {{ tone?: "error" | "success", title?: string, message: string }} detail Snackbar payload.
+ * @returns {void}
+ */
+function showSnackbar(detail) {
+  window.dispatchEvent(new CustomEvent("cart:snackbar", { detail }));
+}
+
+/**
+ * Minimal product card with GSAP motion (scroll reveal, hover tilt, add-to-cart feedback).
+ *
+ * @param {{ product: object, index?: number }} props Product row and its grid index (used for stagger).
+ * @returns {JSX.Element}
+ */
+export default function ProductCard({ product, index = 0 }) {
   const [added, setAdded] = useState(false);
-  const timerRef = useRef(null);
-  const [imgError, setImgError] = useState(false);
   const [adding, setAdding] = useState(false);
+  const [imgError, setImgError] = useState(false);
   const [hydrated, setHydrated] = useState(false);
+  const timerRef = useRef(null);
+  const cardRef = useRef(null);
+  const mediaRef = useRef(null);
+  const bounceRef = useRef(null);
+  const buttonRef = useRef(null);
+  const chipRef = useRef(null);
   const router = useRouter();
-  const rawSkuId = product?.id ?? product?.sku_id ?? product?.skuId ?? "";
-  const skuId = String(rawSkuId).trim();
-  const imageCandidates = [
-    ...(Array.isArray(product?.imageFiles) ? product.imageFiles : []),
-    product?.imageFile,
-    product?.imageUrl,
-  ];
-  const imageSrc =
-    imageCandidates
-      .map((url) => String(url || "").trim())
-      .find(Boolean) || "";
 
+  const model = buildProductCardModel(product);
+  const { skuId, imageSrc, detailHref, stockTone, isOutOfStock, canAdd, altText, stockText, warrantyText } = model;
 
-
+  useProductCardMotion({ cardRef, mediaRef, index });
 
   useEffect(() => {
     setHydrated(true);
     return () => {
-      if (timerRef.current) {
-        clearTimeout(timerRef.current);
-      }
+      if (timerRef.current) clearTimeout(timerRef.current);
     };
   }, []);
 
+  /**
+   * Add one unit of this SKU to the cart with optimistic feedback.
+   *
+   * @returns {Promise<void>}
+   */
   const handleAdd = async () => {
     if (adding) return;
-  if (!skuId) {
-    window.dispatchEvent(
-      new CustomEvent("cart:snackbar", {
-        detail: {
-          tone: "error",
-          title: "เพิ่มไม่สำเร็จ",
-          message: "เพิ่มสินค้าไม่ได้: รายการนี้ยังไม่พร้อมสั่งซื้อ",
-        },
-      })
-    );
-    return;
-  }
 
-  if (product.stockVariant ==='out') {
-    window.dispatchEvent(
-      new CustomEvent("cart:snackbar", {
-        detail: {
-          tone: "error",
-          title: "เพิ่มไม่สำเร็จ",
-          message: "เพิ่มสินค้าไม่ได้: สินค้าหมดชั่วคราว",
-        },
-      })
-    );
-    return;
-  }
-
-
-
+    if (!skuId) {
+      showSnackbar({ tone: "error", title: "เพิ่มไม่สำเร็จ", message: "รายการนี้ยังไม่พร้อมสั่งซื้อ" });
+      return;
+    }
+    if (isOutOfStock) {
+      showSnackbar({ tone: "error", title: "เพิ่มไม่สำเร็จ", message: "สินค้าหมดชั่วคราว" });
+      return;
+    }
 
     setAdding(true);
-    // Optimistic UI: show immediate feedback and badge update without waiting network roundtrip.
     setAdded(true);
+    playAddToCartFeedback({ button: buttonRef.current, bounce: bounceRef.current, chip: chipRef.current });
     window.dispatchEvent(new Event("cart:updated"));
-    if (timerRef.current) {
-      clearTimeout(timerRef.current);
-    }
-    timerRef.current = setTimeout(() => setAdded(false), 800);
+    if (timerRef.current) clearTimeout(timerRef.current);
+    timerRef.current = setTimeout(() => setAdded(false), ADDED_FEEDBACK_MS);
 
     try {
       const response = await fetch("/api/cart/add", {
@@ -82,102 +82,142 @@ export default function ProductCard({ product }) {
       });
 
       if (response.status === 401) {
-        router.push("/auth");
         setAdded(false);
         window.dispatchEvent(new Event("cart:updated"));
+        router.push("/auth");
         return;
       }
 
       if (response.ok) {
-        window.dispatchEvent(
-          new CustomEvent("cart:snackbar", { detail: { message: "เพิ่มสินค้าแล้ว" } })
-        );
+        showSnackbar({ message: "เพิ่มสินค้าแล้ว" });
       } else {
         setAdded(false);
         window.dispatchEvent(new Event("cart:updated"));
       }
+    } catch {
+      setAdded(false);
+      window.dispatchEvent(new Event("cart:updated"));
+      showSnackbar({ tone: "error", title: "เพิ่มไม่สำเร็จ", message: "เชื่อมต่อไม่ได้ ลองใหม่อีกครั้ง" });
     } finally {
       setAdding(false);
     }
   };
 
-  const fallbackHref =
-    typeof product?.href === "string" && product.href.trim()
-      ? product.href.trim()
-      : null;
-  const detailHref = skuId ? `/products/${encodeURIComponent(skuId)}` : fallbackHref;
+  const showImage = hydrated && imageSrc && !imgError;
+  const price = splitPrice(product?.price);
+  const priceGroupChip = resolvePriceGroupChip(product?.priceGroup);
+  const buttonLabel = isOutOfStock ? "สินค้าหมด" : added ? "เพิ่มแล้ว" : "เพิ่มลงตะกร้า";
 
   return (
-    <div className="product-card">
+    <article
+      ref={cardRef}
+      className={["product-card", isOutOfStock ? "is-out" : null].filter(Boolean).join(" ")}
+      data-tone={stockTone}
+    >
       {detailHref && (
-        <a className="product-link-overlay" href={detailHref} aria-label="ดูรายละเอียดสินค้า" />
+        <a className="product-link-overlay" href={detailHref} aria-label={`ดูรายละเอียด ${altText}`} />
       )}
-      <div className="product-img">
-        {hydrated && imageSrc && !imgError ? (
-          <img
-            src={imageSrc}
-            alt={`${product.brand} ${product.name}`}
-            className="product-img-real"
-            onError={() => setImgError(true)}
-          />
-        ) : (
-          <svg className="tire-svg" viewBox="0 0 90 90">
-            <circle cx="45" cy="45" r="42" fill="#2a2a2a" stroke="#1a1a1a" strokeWidth="1" />
-            <circle cx="45" cy="45" r="28" fill="#3a3a3a" />
-            <circle cx="45" cy="45" r="16" fill="#222" />
-            <circle cx="45" cy="45" r="8" fill="#6abf2e" />
-            <rect x="43" y="3" width="4" height="8" rx="2" fill="#555" />
-            <rect x="43" y="79" width="4" height="8" rx="2" fill="#555" />
-            <rect x="3" y="43" width="8" height="4" rx="2" fill="#555" />
-            <rect x="79" y="43" width="8" height="4" rx="2" fill="#555" />
-          </svg>
-        )}
-        {product.badge && (
+
+      <div className="product-media">
+        <div className="product-media-parallax" ref={mediaRef}>
+          <div className="product-media-inner" ref={bounceRef}>
+            {showImage ? (
+              <img
+                src={imageSrc}
+                alt={altText}
+                className="product-media-img"
+                loading="lazy"
+                decoding="async"
+                onError={() => setImgError(true)}
+              />
+            ) : (
+              <svg className="product-media-placeholder" viewBox="0 0 90 90" aria-hidden="true">
+                <circle cx="45" cy="45" r="42" fill="#2a2a2a" />
+                <circle cx="45" cy="45" r="28" fill="#3a3a3a" />
+                <circle cx="45" cy="45" r="16" fill="#222" />
+                <circle cx="45" cy="45" r="8" fill="#6abf2e" />
+              </svg>
+            )}
+          </div>
+        </div>
+
+        {product?.badge?.label && (
           <span className={["product-badge", `badge-${product.badge.variant}`].join(" ")}>
             {product.badge.label}
           </span>
         )}
-        <span className="badge-365">365 วัน</span>
+
+        <span className="product-warranty-pill">
+          <Icon icon="solar:shield-check-bold" aria-hidden="true" />
+          365 วัน
+        </span>
       </div>
+
       <div className="product-body">
-        <div className="product-name">{product.size}</div>
-        <div className="product-brand">{product.brand}</div>
-        <div className="product-size">{product.name}</div>
+        <div className="product-brand">{product?.brand}</div>
+        <h3 className="product-title">{product?.size}</h3>
+        <div className="product-sub">{product?.name}</div>
+
+        {stockText && (
+          <div className="product-stock" data-tone={stockTone}>
+            <span className="product-stock-dot" aria-hidden="true" />
+            {stockText}
+          </div>
+        )}
+
         <div className="product-footer">
           <div className="product-price-wrap">
-            {product.oldPrice && <div className="product-price-old">{product.oldPrice}</div>}
+            {priceGroupChip && (
+              <span className="product-price-group" data-tone={priceGroupChip.tone}>
+                <Icon
+                  icon={priceGroupChip.tone === "dealer" ? "solar:crown-bold" : "solar:user-id-bold"}
+                  aria-hidden="true"
+                />
+                {priceGroupChip.label}
+              </span>
+            )}
+            {product?.oldPrice && <s className="product-price-old">{product.oldPrice}</s>}
             <div className="product-price">
-              {product.price}
+              {price.symbol && <span className="product-currency">{price.symbol}</span>}
+              {price.amount}
               <span className="product-unit">/เส้น</span>
             </div>
-            <div
-              className={[
-                "product-stock",
-                product.stockVariant === "low" || product.stockVariant === "out"
-                  ? "stock-out"
-                  : "stock-ok",
-              ].join(" ")}
-            >
-              {product.stock}
-            </div>
           </div>
+
           <button
-            className={["btn-add", added ? "added" : null].filter(Boolean).join(" ")}
+            ref={buttonRef}
+            className={["btn-add", added ? "is-added" : null].filter(Boolean).join(" ")}
             type="button"
             onClick={handleAdd}
-            disabled={adding}
-            
+            disabled={adding || !canAdd}
+            aria-label={buttonLabel}
+            title={buttonLabel}
           >
-            {adding ? <span className="btn-add-spinner" aria-hidden="true" /> : added ? "✓" : "ซื้อ"}
+            <span className="btn-add-chip" ref={chipRef} aria-hidden="true">
+              +1
+            </span>
+            {adding ? (
+              <span className="btn-add-spinner" aria-hidden="true" />
+            ) : added ? (
+              <Icon icon="solar:check-circle-bold" aria-hidden="true" />
+            ) : isOutOfStock ? (
+              <span>หมด</span>
+            ) : (
+              <>
+                <Icon icon="solar:cart-plus-bold" aria-hidden="true" />
+                <span>ซื้อ</span>
+              </>
+            )}
           </button>
         </div>
-        {detailHref && (
-          <a className="product-detail-link" href={detailHref}>
-            ดูรายละเอียดสินค้า
-          </a>
+
+        {warrantyText && (
+          <div className="product-warranty">
+            <Icon icon="solar:shield-check-linear" aria-hidden="true" />
+            {warrantyText}
+          </div>
         )}
-        <div className="warranty-strip">{product.warranty}</div>
       </div>
-    </div>
+    </article>
   );
 }

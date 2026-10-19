@@ -3,6 +3,7 @@ import { getCustomerAuthContext } from "@/lib/auth/customer";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { isTrustedOrigin } from "@/lib/security/request-origin";
 import { queueAndProcessOrderEventNotification } from "@/lib/notifications/jobs";
+import { resolveCustomerPricingGroup } from "@/lib/pricing/customer-group";
 
 const FULFILLMENT_TYPES = new Set(["install", "delivery"]);
 const PAYMENT_OPTIONS = new Set(["full", "deposit"]);
@@ -236,6 +237,9 @@ export async function PATCH(request) {
       );
     }
 
+    const pricing = await resolveCustomerPricingGroup();
+    console.log("[checkout-api] pricing group", { groupCode: pricing.groupCode });
+
     const { data: rpcData, error: rpcError } = await callCheckoutCartAtomic(supabase, {
       p_customer_id: customerId,
       p_fulfillment_type: fulfillmentType,
@@ -248,7 +252,7 @@ export async function PATCH(request) {
       p_order_no: orderNo,
       p_idempotency_key: idempotencyKey,
       p_site_code: "car_retail",
-      p_group_code: "general",
+      p_group_code: pricing.groupCode,
     });
 
     if (rpcError) {

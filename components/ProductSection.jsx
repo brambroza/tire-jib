@@ -30,6 +30,7 @@ export default function ProductSection({ products = [], emptyText, isSearchResul
                 <ProductCard
                   key={`${product.id || `${product.brand}-${product.name}-${product.size}`}-${index}`}
                   product={product}
+                  index={index}
                 />
               );
             })}

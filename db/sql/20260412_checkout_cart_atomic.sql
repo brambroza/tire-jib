@@ -1,6 +1,35 @@
 -- Atomic checkout RPC for Supabase/Postgres
 -- Apply this SQL in Supabase SQL Editor before using /api/cart/checkout.
 
+-- Remove legacy overloads before installing the current signature. Keeping these
+-- functions causes PostgREST to resolve checkout requests against stale RPCs.
+drop function if exists public.checkout_cart_atomic(
+  uuid,
+  text,
+  timestamptz,
+  text,
+  text,
+  double precision,
+  double precision,
+  text,
+  text,
+  text
+);
+
+drop function if exists public.checkout_cart_atomic(
+  uuid,
+  text,
+  timestamptz,
+  text,
+  text,
+  double precision,
+  double precision,
+  text,
+  text,
+  text,
+  text
+);
+
 create table if not exists public.checkout_idempotency (
   id bigserial primary key,
   customer_id uuid not null,
@@ -48,6 +77,7 @@ declare
   v_cart_id uuid;
   v_site_id uuid;
   v_group_id uuid;
+  v_general_group_id uuid;
   v_order_id uuid;
   v_order_no text;
   v_items_total numeric := 0;
@@ -174,6 +204,13 @@ begin
     raise exception 'group_not_configured';
   end if;
 
+  -- General group is the price fallback for SKUs not priced in the customer's group.
+  select cg.id
+    into v_general_group_id
+  from customer_groups cg
+  where cg.code::text = 'general'
+  limit 1;
+
   if exists (
     select 1
     from cart_items ci
@@ -213,7 +250,7 @@ begin
       select pr.price
       from prices pr
       where pr.sku_id = sku.id
-        and (v_group_id is null or pr.group_id = v_group_id)
+        and pr.group_id in (v_group_id, v_general_group_id)
       order by case when pr.group_id = v_group_id then 0 else 1 end
       limit 1
     ) pp on true
@@ -231,7 +268,7 @@ begin
     select pr.price
     from prices pr
     where pr.sku_id = sku.id
-      and (v_group_id is null or pr.group_id = v_group_id)
+      and pr.group_id in (v_group_id, v_general_group_id)
     order by case when pr.group_id = v_group_id then 0 else 1 end
     limit 1
   ) pp on true
@@ -329,7 +366,7 @@ begin
       select pr.price
       from prices pr
       where pr.sku_id = sku.id
-        and (v_group_id is null or pr.group_id = v_group_id)
+        and pr.group_id in (v_group_id, v_general_group_id)
       order by case when pr.group_id = v_group_id then 0 else 1 end
       limit 1
     ) pp on true
@@ -350,7 +387,7 @@ begin
           select pr.price
           from prices pr
           where pr.sku_id = sku.id
-            and (v_group_id is null or pr.group_id = v_group_id)
+            and pr.group_id in (v_group_id, v_general_group_id)
           order by case when pr.group_id = v_group_id then 0 else 1 end
           limit 1
         ) pp on true
@@ -479,3 +516,6 @@ grant execute on function public.checkout_cart_atomic(
   text,
   text
 ) to authenticated, service_role;
+
+-- Refresh PostgREST so the new RPC signature is immediately available.
+notify pgrst, 'reload schema';
