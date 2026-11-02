@@ -3,8 +3,15 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Icon } from "@iconify/react";
-import { buildProductCardModel, resolvePriceGroupChip, splitPrice } from "@/lib/product/card-model.mjs";
+import {
+  buildProductCardModel,
+  resolvePriceGroupChip,
+  resolvePromoChip,
+  resolveRibbon,
+  splitPrice,
+} from "@/lib/product/card-model.mjs";
 import { playAddToCartFeedback, useProductCardMotion } from "@/lib/motion/useProductCardMotion";
+import ProductRibbon from "@/components/ProductRibbon";
 
 /** How long the "added" check state stays visible on the buy button. */
 const ADDED_FEEDBACK_MS = 900;
@@ -106,12 +113,16 @@ export default function ProductCard({ product, index = 0 }) {
   const showImage = hydrated && imageSrc && !imgError;
   const price = splitPrice(product?.price);
   const priceGroupChip = resolvePriceGroupChip(product?.priceGroup);
+  const promoChip = resolvePromoChip(product?.promo);
+  const ribbon = resolveRibbon(product?.badge);
   const buttonLabel = isOutOfStock ? "สินค้าหมด" : added ? "เพิ่มแล้ว" : "เพิ่มลงตะกร้า";
 
   return (
     <article
       ref={cardRef}
-      className={["product-card", isOutOfStock ? "is-out" : null].filter(Boolean).join(" ")}
+      className={["product-card", isOutOfStock ? "is-out" : null, promoChip ? "is-promo" : null]
+        .filter(Boolean)
+        .join(" ")}
       data-tone={stockTone}
     >
       {detailHref && (
@@ -141,10 +152,14 @@ export default function ProductCard({ product, index = 0 }) {
           </div>
         </div>
 
-        {product?.badge?.label && (
-          <span className={["product-badge", `badge-${product.badge.variant}`].join(" ")}>
-            {product.badge.label}
-          </span>
+        {ribbon ? (
+          <ProductRibbon badge={product.badge} />
+        ) : (
+          product?.badge?.label && (
+            <span className={["product-badge", `badge-${product.badge.variant}`].join(" ")}>
+              {product.badge.label}
+            </span>
+          )
         )}
 
         <span className="product-warranty-pill">
@@ -167,17 +182,27 @@ export default function ProductCard({ product, index = 0 }) {
 
         <div className="product-footer">
           <div className="product-price-wrap">
-            {priceGroupChip && (
-              <span className="product-price-group" data-tone={priceGroupChip.tone}>
-                <Icon
-                  icon={priceGroupChip.tone === "dealer" ? "solar:crown-bold" : "solar:user-id-bold"}
-                  aria-hidden="true"
-                />
-                {priceGroupChip.label}
-              </span>
+            {(priceGroupChip || promoChip) && (
+              <div className="product-price-tags">
+                {priceGroupChip && (
+                  <span className="product-price-group" data-tone={priceGroupChip.tone}>
+                    <Icon
+                      icon={priceGroupChip.tone === "dealer" ? "solar:crown-bold" : "solar:user-id-bold"}
+                      aria-hidden="true"
+                    />
+                    {priceGroupChip.label}
+                  </span>
+                )}
+                {promoChip && (
+                  <span className="product-promo-chip">
+                    <Icon icon="solar:tag-price-bold" aria-hidden="true" />
+                    {promoChip.label}
+                  </span>
+                )}
+              </div>
             )}
             {product?.oldPrice && <s className="product-price-old">{product.oldPrice}</s>}
-            <div className="product-price">
+            <div className={["product-price", promoChip ? "is-promo" : null].filter(Boolean).join(" ")}>
               {price.symbol && <span className="product-currency">{price.symbol}</span>}
               {price.amount}
               <span className="product-unit">/เส้น</span>

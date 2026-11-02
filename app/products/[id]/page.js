@@ -3,10 +3,16 @@ import Topbar from "@/components/Topbar";
 import Navbar from "@/components/Navbar";
 import Footer from "@/components/Footer";
 import ProductDetailAddToCartButton from "@/components/ProductDetailAddToCartButton";
+import ProductRibbon from "@/components/ProductRibbon";
+import { resolveRibbon } from "@/lib/product/card-model.mjs";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { formatTHB } from "@/lib/utils/format";
 import { getSiteAndGroupId, getProductBadges } from "@/lib/supabase/queries";
-import { buildPriceGroupIds } from "@/lib/pricing/customer-group";
+import {
+  buildPriceGroupIds,
+  pickPriceRow,
+  resolveEffectivePrice,
+} from "@/lib/pricing/customer-group";
 
 export const metadata = {
   title: "รายละเอียดสินค้า — สวัสดี จิ๊บจิ๊บ",
@@ -158,14 +164,32 @@ export default async function ProductDetailPage({ params }) {
     notFound();
   }
 
-  const price = Number(sku.price ?? 0);
-  const oldPrice = Number(sku.old_price ?? 0);
+  // get_product_detail does not return promo_price yet, so read the price row
+  // for the group the RPC resolved to and pick up its promotion from there.
+  let promoPrice = sku.promo_price ?? null;
+  if (promoPrice === null || promoPrice === undefined) {
+    const { data: priceRows } = await supabase
+      .from("prices")
+      .select("price, promo_price, group_id")
+      .eq("sku_id", sku.id)
+      .in("group_id", buildPriceGroupIds(groupId, generalGroupId));
+    const usedGroupId = sku.group_id ?? groupId;
+    const matched = pickPriceRow(priceRows, usedGroupId, generalGroupId);
+    promoPrice = matched?.promo_price ?? null;
+  }
+
+  const effective = resolveEffectivePrice({ price: sku.price, promo_price: promoPrice });
+  const price = effective.price;
+  const oldPrice = effective.isPromo
+    ? effective.basePrice
+    : Number(sku.old_price ?? 0);
   const qty = Number(sku.qty_on_hand ?? 0);
 
   const badge = getProductBadges({
     qty_on_hand: qty,
-    price,
-    old_price: oldPrice,
+    price: sku.price,
+    promo_price: promoPrice,
+    old_price: sku.old_price,
     is_hot: sku.is_hot,
     is_new: sku.is_new,
     is_promotion: sku.is_promotion,
@@ -198,6 +222,7 @@ export default async function ProductDetailPage({ params }) {
 
       <div className="product-detail">
         <div className="product-detail-media">
+          <ProductRibbon badge={badge} size="lg" />
           {imageSrc ? (
             <img
               className="product-detail-img"
@@ -216,25 +241,51 @@ export default async function ProductDetailPage({ params }) {
 
           <div className="product-detail-size">{sku.product_name}</div>
 
-          <div className="product-detail-price-wrap">
-            {oldPrice > price ? (
-              <div className="product-detail-old-price">
-                {formatTHB(oldPrice)}
+          <div
+            className={`product-detail-price-wrap ${effective.isPromo ? "is-promo" : ""}`}
+          >
+            {effective.isPromo ? (
+              <div className="product-detail-promo-chip">
+                <svg viewBox="0 0 24 24" aria-hidden="true" fill="currentColor">
+                  <path d="M3 11.2V5a2 2 0 0 1 2-2h6.2a2 2 0 0 1 1.4.6l8.2 8.2a2 2 0 0 1 0 2.8l-6.2 6.2a2 2 0 0 1-2.8 0L3.6 12.6a2 2 0 0 1-.6-1.4ZM7.5 9a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3Z" />
+                </svg>
+                {effective.discountPercent > 0
+                  ? `ราคาโปรโมชั่น ลด ${effective.discountPercent}%`
+                  : "ราคาโปรโมชั่น"}
               </div>
             ) : null}
 
-            <div className="product-detail-price">{formatTHB(price)}</div>
+            <div className="product-detail-price-row">
+              {oldPrice > price ? (
+                <s className="product-detail-old-price">{formatTHB(oldPrice)}</s>
+              ) : null}
 
-            <div
-              className={`product-detail-stock ${qty > 0 ? "in-stock" : ""}`}
-            >
-              {qty > 0 ? `พร้อมส่งในสต็อก ${qty} เส้น` : "สินค้าหมดชั่วคราว"}
+              <div
+                className={`product-detail-price ${effective.isPromo ? "is-promo" : ""}`}
+              >
+                {formatTHB(price)}
+                <span className="product-detail-price-unit">/เส้น</span>
+              </div>
             </div>
-            {badge ? (
-              <div className={`product-detail-stock product-badge-${badge.variant}`}>
-                {badge.label}
+
+            {effective.isPromo && effective.saving > 0 ? (
+              <div className="product-detail-saving">
+                ประหยัด {formatTHB(effective.saving)} ต่อเส้น
               </div>
             ) : null}
+
+            <div className="product-detail-meta">
+              <div
+                className={`product-detail-stock ${qty > 0 ? "in-stock" : ""}`}
+              >
+                {qty > 0 ? `พร้อมส่งในสต็อก ${qty} เส้น` : "สินค้าหมดชั่วคราว"}
+              </div>
+              {badge && !resolveRibbon(badge) ? (
+                <div className={`product-detail-stock product-badge-${badge.variant}`}>
+                  {badge.label}
+                </div>
+              ) : null}
+            </div>
           </div>
 
           <div className="product-detail-desc">
