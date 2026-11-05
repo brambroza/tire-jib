@@ -42,7 +42,7 @@ export default async function CheckoutPage() {
       <div className="checkout-page">
         <div className="section">
           <div className="section-title">กรุณาเข้าสู่ระบบก่อนทำรายการ</div>
-          <a className="cart-link" href="/auth">
+          <a className="cart-link" href="/auth?next=%2Fcheckout">
             ไปที่หน้าเข้าสู่ระบบ
           </a>
         </div>
@@ -53,7 +53,8 @@ export default async function CheckoutPage() {
   let cartData = { cart: null, items: [], total: 0 };
   if (auth.mode === "supabase") {
     cartData = await fetchActiveCart(auth.customerId);
-  } else if (auth.mode === "line") {
+  } else {
+    // LINE session or guest: no Supabase auth user, read with the service client.
     const admin = createSupabaseAdminClient();
     cartData = await fetchActiveCartWithAdmin(admin, auth.customerId);
   }
@@ -78,7 +79,10 @@ export default async function CheckoutPage() {
           </div>
           <div className="checkout-card">
             <div className="checkout-title checkout-title-mobile-hidden">ขั้นตอนการสั่งซื้อ</div>
-            <CheckoutFlow initialCart={{ ...cartData, shippingProvinces }} />
+            <CheckoutFlow
+              initialCart={{ ...cartData, shippingProvinces }}
+              isGuest={auth.mode === "guest"}
+            />
           </div>
         </div>
       </div>

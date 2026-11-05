@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { clearLineSessionCookie } from "@/lib/auth/line-session";
+import { clearGuestSessionCookie } from "@/lib/auth/guest-session";
 import { isTrustedOrigin } from "@/lib/security/request-origin";
 
 export async function POST(request) {
@@ -17,6 +18,7 @@ export async function POST(request) {
   }
 
   clearLineSessionCookie(response);
+  clearGuestSessionCookie(response);
   response.cookies.delete("line_user_id");
   response.cookies.delete("line_customer_id");
   return response;

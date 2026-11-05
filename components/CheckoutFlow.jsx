@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { formatTHB } from "@/lib/utils/format";
+import { validateGuestContact } from "@/lib/checkout/guest-contact.mjs";
 
 const CHECKOUT_IDEMPOTENCY_STORAGE_KEY = "checkout:idempotency-key";
 const BANGKOK_TIME_ZONE = "Asia/Bangkok";
@@ -56,8 +57,11 @@ function clearCheckoutIdempotencyKey() {
 /**
  * Multi-step checkout: service type, location, schedule (install only), confirm.
  * Payment happens after confirmation via LINE, so no slip is collected here.
+ * Guests (no login) also enter name + phone; the shop contacts them by phone.
+ *
+ * @param {{ initialCart: object, isGuest?: boolean }} props
  */
-export default function CheckoutFlow({ initialCart }) {
+export default function CheckoutFlow({ initialCart, isGuest = false }) {
   const router = useRouter();
   const [cart] = useState(initialCart?.cart || null);
   const [items] = useState(initialCart?.items || []);
@@ -104,6 +108,8 @@ export default function CheckoutFlow({ initialCart }) {
       ? String(initialCart.cart.location_lon)
       : ""
   );
+  const [contactName, setContactName] = useState(initialCart?.customer?.full_name?.trim() || "");
+  const [contactPhone, setContactPhone] = useState(initialCart?.customer?.phone?.trim() || "");
   const [step, setStep] = useState(1);
   const [submitAttemptStep, setSubmitAttemptStep] = useState(0);
   const [confirmAttempted, setConfirmAttempted] = useState(false);
@@ -262,16 +268,25 @@ export default function CheckoutFlow({ initialCart }) {
           location_lon: lon ? Number(lon) : null,
           payment_option: "full",
           idempotency_key: idempotencyKey,
+          ...(isGuest ? { contact_name: contactName, contact_phone: contactPhone } : {}),
         }),
       });
       console.log("[checkout] response status", res.status);
       const payload = await res.json().catch(() => ({}));
       console.log("[checkout] response payload", payload);
       if (!res.ok) {
+        if (payload?.error === "invalid_guest_contact") {
+          setStep(2);
+          throw new Error("กรุณากรอกชื่อ เบอร์โทร และที่อยู่ให้ครบถ้วน");
+        }
         throw new Error(payload?.detail || payload?.error || "save_failed");
       }
       clearCheckoutIdempotencyKey();
-      setStatus("รับคำสั่งซื้อแล้ว ส่งสรุปและช่องทางชำระเงินไปที่ LINE ของคุณ กำลังพาไปหน้าสถานะคำสั่งซื้อ...");
+      setStatus(
+        isGuest
+          ? `รับคำสั่งซื้อแล้ว ทางร้านจะโทรยืนยันและแจ้งช่องทางชำระเงินที่เบอร์ ${contactPhone} กำลังพาไปหน้าสถานะคำสั่งซื้อ...`
+          : "รับคำสั่งซื้อแล้ว ส่งสรุปและช่องทางชำระเงินไปที่ LINE ของคุณ กำลังพาไปหน้าสถานะคำสั่งซื้อ..."
+      );
       setTimeout(() => {
         router.push("/orders");
       }, 800);
@@ -295,12 +310,17 @@ export default function CheckoutFlow({ initialCart }) {
   const provinceRequired = needsLocation && shippingProvinces.length > 0;
   const hasProvince = !provinceRequired || Boolean(province.trim());
   const hasLocation = Boolean(address.trim()); // && Boolean(lat) && Boolean(lon)
+  const guestContact = isGuest
+    ? validateGuestContact({ name: contactName, phone: contactPhone, address })
+    : null;
+  const hasContact = !guestContact || guestContact.ok;
   const canConfirm =
     (isShippingOnly || Boolean(scheduledAt)) &&
-    (!needsLocation || (hasProvince && hasLocation));
+    (!needsLocation || (hasProvince && hasLocation)) &&
+    hasContact;
   const canNext =
     (step === 1 && Boolean(fulfillmentType)) ||
-    (step === 2 && (!needsLocation || (hasProvince && hasLocation))) ||
+    (step === 2 && (!needsLocation || (hasProvince && hasLocation)) && hasContact) ||
     (step === 3 && Boolean(scheduledAt)) ||
     step === 4;
 
@@ -310,6 +330,8 @@ export default function CheckoutFlow({ initialCart }) {
   const latError = showStepErrors && needsLocation && !lat.trim();
   const lonError = showStepErrors && needsLocation && !lon.trim();
   const dateTimeError = showStepErrors && !isShippingOnly && step === 3 && !scheduledAt;
+  const contactNameError = showStepErrors && guestContact?.errors.name;
+  const contactPhoneError = showStepErrors && guestContact?.errors.phone;
 
   const handleNextStep = () => {
     if (!canNext) {
@@ -454,6 +476,38 @@ export default function CheckoutFlow({ initialCart }) {
                 ? "กรุณาระบุที่อยู่และเบอร์โทรสำหรับจัดส่ง"
                 : "ช่างจะโทรยืนยันก่อนถึงเวลานัด"}
             </div>
+            {isGuest ? (
+              <>
+                <div className="checkout-field">
+                  <label htmlFor="checkout-contact-name">ชื่อผู้สั่งซื้อ</label>
+                  <input
+                    id="checkout-contact-name"
+                    className={`checkout-input ${contactNameError ? "input-error" : ""}`}
+                    autoComplete="name"
+                    maxLength={100}
+                    placeholder="ชื่อ-นามสกุล"
+                    value={contactName}
+                    onChange={(event) => setContactName(event.target.value)}
+                  />
+                  {contactNameError && <div className="checkout-input-error">{contactNameError}</div>}
+                </div>
+                <div className="checkout-field">
+                  <label htmlFor="checkout-contact-phone">เบอร์โทร</label>
+                  <input
+                    id="checkout-contact-phone"
+                    className={`checkout-input ${contactPhoneError ? "input-error" : ""}`}
+                    type="tel"
+                    inputMode="tel"
+                    autoComplete="tel"
+                    maxLength={20}
+                    placeholder="0812345678"
+                    value={contactPhone}
+                    onChange={(event) => setContactPhone(event.target.value)}
+                  />
+                  {contactPhoneError && <div className="checkout-input-error">{contactPhoneError}</div>}
+                </div>
+              </>
+            ) : null}
             <div className="checkout-field">
               <label htmlFor="checkout-province">จังหวัด</label>
               <select
@@ -621,9 +675,22 @@ export default function CheckoutFlow({ initialCart }) {
           <>
             <div className="checkout-step-title">ตรวจสอบก่อนยืนยัน</div>
             <div className="checkout-hint">
-              หลังยืนยัน ระบบจะส่งสรุปคำสั่งซื้อและช่องทางชำระเงินให้ทาง LINE
+              {isGuest
+                ? "หลังยืนยัน ทางร้านจะโทรยืนยันคำสั่งซื้อและแจ้งช่องทางชำระเงิน"
+                : "หลังยืนยัน ระบบจะส่งสรุปคำสั่งซื้อและช่องทางชำระเงินให้ทาง LINE"}
             </div>
             <div className="checkout-review">
+              {isGuest && (
+                <div className="checkout-review-row">
+                  <span>ผู้สั่งซื้อ</span>
+                  <b className={hasContact ? "" : "is-missing"}>
+                    {[contactName.trim(), contactPhone.trim()].filter(Boolean).join(" · ") || "ยังไม่ระบุ"}
+                    <button type="button" className="checkout-review-edit" onClick={() => setStep(2)}>
+                      แก้ไข
+                    </button>
+                  </b>
+                </div>
+              )}
               <div className="checkout-review-row">
                 <span>บริการ</span>
                 <b>
@@ -656,7 +723,11 @@ export default function CheckoutFlow({ initialCart }) {
             </div>
             <div className="checkout-review-note">
               <b>การชำระเงิน</b>
-              <span>ยอดรวม {formatTHB(totalAmount)} ชำระหลังยืนยัน ทางร้านจะส่งเลขบัญชีให้ทาง LINE แล้วส่งสลิปกลับในแชทได้เลย</span>
+              <span>
+                {isGuest
+                  ? `ยอดรวม ${formatTHB(totalAmount)} ชำระหลังยืนยัน ทางร้านจะโทรแจ้งเลขบัญชีที่เบอร์ที่ให้ไว้`
+                  : `ยอดรวม ${formatTHB(totalAmount)} ชำระหลังยืนยัน ทางร้านจะส่งเลขบัญชีให้ทาง LINE แล้วส่งสลิปกลับในแชทได้เลย`}
+              </span>
             </div>
           </>
         )}

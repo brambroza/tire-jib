@@ -28,7 +28,8 @@ export async function GET() {
   const auth = await getCustomerAuthContext();
   const customerId = auth.customerId;
 
-  if (!customerId) {
+  // Guests have a cart but no member profile; menus should still offer LINE login.
+  if (!customerId || auth.mode === "guest") {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 

@@ -5,6 +5,7 @@ import { isTrustedOrigin } from "@/lib/security/request-origin";
 import { queueAndProcessOrderEventNotification } from "@/lib/notifications/jobs";
 import { resolveCustomerPricingGroup } from "@/lib/pricing/customer-group";
 import { fetchSitePaymentAccount } from "@/lib/payments/site-payment-account";
+import { validateGuestContact } from "@/lib/checkout/guest-contact.mjs";
 
 const FULFILLMENT_TYPES = new Set(["install", "delivery"]);
 const PAYMENT_OPTIONS = new Set(["full", "deposit"]);
@@ -191,6 +192,26 @@ export async function PATCH(request) {
       }
     }
 
+    // Guests have no LINE profile: name + phone + address are how the shop reaches them.
+    let guestContact = null;
+    if (auth.mode === "guest") {
+      const contact = validateGuestContact({
+        name: payload?.contact_name,
+        phone: payload?.contact_phone,
+        address,
+      });
+      if (!contact.ok) {
+        console.log("[checkout-api] return bad request: invalid_guest_contact", {
+          fields: Object.keys(contact.errors),
+        });
+        return NextResponse.json(
+          { error: "invalid_guest_contact", fields: contact.errors },
+          { status: 400 }
+        );
+      }
+      guestContact = contact.value;
+    }
+
     if (fulfillmentType === "delivery") {
       if (!address) {
         console.log("[checkout-api] return bad request: invalid_delivery_location", {
@@ -301,6 +322,13 @@ export async function PATCH(request) {
         pay_now_amount: payNowAmount,
         datetrans: dateTrans,
         timetrans: timeTrans,
+        ...(guestContact
+          ? {
+              customer_name: guestContact.name,
+              customer_phone: guestContact.phone,
+              customer_address: guestContact.address,
+            }
+          : {}),
       })
       .eq("id", row.order_id);
 
@@ -310,6 +338,21 @@ export async function PATCH(request) {
         { error: "order_payment_option_update_failed", detail: updateOrderError.message },
         { status: 500 }
       );
+    }
+
+    if (guestContact) {
+      // Keep the latest contact on the guest record so admin can see it on the customer too.
+      const { error: guestUpdateError } = await supabase
+        .from("customes")
+        .update({
+          full_name: guestContact.name,
+          phone: guestContact.phone,
+          address: guestContact.address,
+        })
+        .eq("id", customerId);
+      if (guestUpdateError) {
+        console.error("Update guest contact failed", guestUpdateError);
+      }
     }
 
     const { error: updateAppointmentError } = await supabase
@@ -378,6 +421,7 @@ export async function PATCH(request) {
 
     return NextResponse.json({
       ok: true,
+      guest: Boolean(guestContact),
       order: {
         id: row.order_id,
         order_no: row.order_no,

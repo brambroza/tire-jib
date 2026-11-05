@@ -91,7 +91,7 @@ export default function ProductCard({ product, index = 0 }) {
       if (response.status === 401) {
         setAdded(false);
         window.dispatchEvent(new Event("cart:updated"));
-        router.push("/auth");
+        router.push(`/auth?next=${encodeURIComponent(window.location.pathname + window.location.search)}`);
         return;
       }
 

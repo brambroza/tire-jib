@@ -27,7 +27,7 @@ export default function ProductDetailAddToCartButton({
       });
 
       if (response.status === 401) {
-        router.push("/auth");
+        router.push(`/auth?next=${encodeURIComponent(window.location.pathname + window.location.search)}`);
         return;
       }
 

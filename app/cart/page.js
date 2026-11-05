@@ -36,7 +36,8 @@ export default async function CartPage() {
   let cartData = { cart: null, items: [], total: 0 };
   if (auth.mode === "supabase") {
     cartData = await fetchActiveCart(auth.customerId);
-  } else if (auth.mode === "line") {
+  } else {
+    // LINE session or guest: no Supabase auth user, read with the service client.
     const admin = createSupabaseAdminClient();
     cartData = await fetchActiveCartWithAdmin(admin, auth.customerId);
   }
