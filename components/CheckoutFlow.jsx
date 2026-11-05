@@ -326,17 +326,58 @@ export default function CheckoutFlow({ initialCart, isGuest = false }) {
 
   const showStepErrors = submitAttemptStep === step || confirmAttempted;
   const provinceError = showStepErrors && provinceRequired && !province.trim();
-  const addressError = showStepErrors && needsLocation && !address.trim();
-  const latError = showStepErrors && needsLocation && !lat.trim();
-  const lonError = showStepErrors && needsLocation && !lon.trim();
+  const addressErrorText = !address.trim()
+    ? isShippingOnly
+      ? "กรุณากรอกที่อยู่และเบอร์โทรสำหรับจัดส่ง"
+      : "กรุณากรอกที่อยู่สำหรับติดตั้ง"
+    : guestContact?.errors.address || "";
+  const addressError = showStepErrors && needsLocation ? addressErrorText : "";
   const dateTimeError = showStepErrors && !isShippingOnly && step === 3 && !scheduledAt;
   const contactNameError = showStepErrors && guestContact?.errors.name;
   const contactPhoneError = showStepErrors && guestContact?.errors.phone;
 
+  /**
+   * Fields the current step still needs, in display order.
+   * Each entry has the input id (for focus) and a short Thai label.
+   * @returns {Array<{ id: string, label: string }>}
+   */
+  const getMissingFields = () => {
+    const missing = [];
+    if (step === 1 && !fulfillmentType) {
+      missing.push({ id: "", label: "รูปแบบการรับบริการ" });
+    }
+    if (step === 2) {
+      if (guestContact?.errors.name) missing.push({ id: "checkout-contact-name", label: "ชื่อผู้สั่งซื้อ" });
+      if (guestContact?.errors.phone) missing.push({ id: "checkout-contact-phone", label: "เบอร์โทร" });
+      if (provinceRequired && !province.trim()) missing.push({ id: "checkout-province", label: "จังหวัด" });
+      if (needsLocation && addressErrorText) missing.push({ id: "checkout-address", label: "ที่อยู่" });
+    }
+    if (step === 3 && !isShippingOnly) {
+      if (!scheduledDate) missing.push({ id: "checkout-date", label: "วันที่" });
+      else if (!scheduledTimeText) missing.push({ id: "checkout-time", label: "ช่วงเวลา" });
+    }
+    return missing;
+  };
+
+  /** Scroll to and focus the first invalid field so the error is on screen. */
+  const focusField = (id) => {
+    if (!id || typeof document === "undefined") return;
+    const element = document.getElementById(id);
+    if (!element) return;
+    element.scrollIntoView({ behavior: "smooth", block: "center" });
+    if (typeof element.focus === "function") element.focus({ preventScroll: true });
+  };
+
   const handleNextStep = () => {
     if (!canNext) {
       setSubmitAttemptStep(step);
-      setStatus("กรุณากรอกข้อมูลที่จำเป็นให้ครบก่อนยืนยัน");
+      const missing = getMissingFields();
+      setStatus(
+        missing.length
+          ? `กรุณากรอกให้ครบ: ${missing.map((field) => field.label).join(", ")}`
+          : "กรุณากรอกข้อมูลที่จำเป็นให้ครบก่อนยืนยัน"
+      );
+      focusField(missing[0]?.id);
       return;
     }
     setSubmitAttemptStep(0);
@@ -387,7 +428,23 @@ export default function CheckoutFlow({ initialCart, isGuest = false }) {
   const handleConfirm = () => {
     setConfirmAttempted(true);
     if (!canConfirm) {
-      setStatus("กรุณากรอกข้อมูลที่จำเป็นให้ครบก่อนยืนยัน");
+      // Send the customer back to the first step that is still incomplete.
+      const contactOrLocationMissing =
+        !hasContact || (needsLocation && (!hasProvince || !hasLocation));
+      const targetStep = contactOrLocationMissing ? 2 : 3;
+      const labels = [];
+      if (guestContact?.errors.name) labels.push("ชื่อผู้สั่งซื้อ");
+      if (guestContact?.errors.phone) labels.push("เบอร์โทร");
+      if (provinceRequired && !province.trim()) labels.push("จังหวัด");
+      if (needsLocation && addressErrorText) labels.push("ที่อยู่");
+      if (!isShippingOnly && !scheduledAt) labels.push("วันและเวลา");
+      setSubmitAttemptStep(targetStep);
+      setStep(targetStep);
+      setStatus(
+        labels.length
+          ? `กรุณากรอกให้ครบ: ${labels.join(", ")}`
+          : "กรุณากรอกข้อมูลที่จำเป็นให้ครบก่อนยืนยัน"
+      );
       return;
     }
     handleSave();
@@ -545,13 +602,7 @@ export default function CheckoutFlow({ initialCart, isGuest = false }) {
                 value={address}
                 onChange={(event) => setAddress(event.target.value)}
               />
-              {addressError && (
-                <div className="checkout-input-error">
-                  {isShippingOnly
-                    ? "กรุณากรอกที่อยู่และเบอร์โทรสำหรับจัดส่ง"
-                    : "กรุณากรอกที่อยู่สำหรับติดตั้ง"}
-                </div>
-              )}
+              {addressError && <div className="checkout-input-error">{addressError}</div>}
             </div>
             {!isShippingOnly ? (
               <>
@@ -588,25 +639,20 @@ export default function CheckoutFlow({ initialCart, isGuest = false }) {
                 </div>
                 <div className="checkout-location-row">
                   <input
-                    className={`checkout-input ${latError ? "input-error" : ""}`}
+                    className="checkout-input"
                     placeholder="ละติจูด (lat)"
                     value={lat}
                     disabled
                     onChange={(event) => setLat(event.target.value)}
                   />
                   <input
-                    className={`checkout-input ${lonError ? "input-error" : ""}`}
+                    className="checkout-input"
                     placeholder="ลองจิจูด (lon)"
                     value={lon}
                     disabled
                     onChange={(event) => setLon(event.target.value)}
                   />
                 </div>
-                {(latError || lonError) && (
-                  <div className="checkout-input-error">
-                    กรุณาระบุละติจูดและลองจิจูดให้ครบ
-                  </div>
-                )}
                 {lat && lon && (
                   <a
                     className="checkout-map-link"
