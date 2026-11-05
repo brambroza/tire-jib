@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { startLineLogin } from "@/lib/auth/line-login";
 
 export default function AuthPanel() {
   const [status, setStatus] = useState("");
@@ -9,41 +10,12 @@ export default function AuthPanel() {
 
   const handleLineAuth = async () => {
     setLoading(true);
-    setStatus("");
+    setStatus("กำลังพาไปที่ LINE...");
     setStatusTone("info");
     try {
-      const channelId = process.env.NEXT_PUBLIC_LINE_CHANNEL_ID;
-      if (!channelId) {
-        throw new Error("ยังไม่ได้ตั้งค่า NEXT_PUBLIC_LINE_CHANNEL_ID");
-      }
-      if (!window?.crypto?.subtle) {
-        throw new Error("เบราว์เซอร์ไม่รองรับการเข้ารหัสที่จำเป็นสำหรับ LINE PKCE");
-      }
-
-      const siteUrl =
-        process.env.NEXT_PUBLIC_SITE_URL?.replace(/\/$/, "") || window.location.origin;
-      const redirectTo = `${siteUrl}/line/callback`;
-      const codeVerifier = generateCodeVerifier();
-      const codeChallenge = await generateCodeChallenge(codeVerifier);
-      const state = generateState();
-
-      sessionStorage.setItem("line_code_verifier", codeVerifier);
-      sessionStorage.setItem("line_oauth_state", state);
-      localStorage.setItem("line_code_verifier", codeVerifier);
-      localStorage.setItem("line_oauth_state", state);
-
-      const authUrl = new URL("https://access.line.me/oauth2/v2.1/authorize");
-      authUrl.searchParams.set("response_type", "code");
-      authUrl.searchParams.set("client_id", channelId);
-      authUrl.searchParams.set("redirect_uri", redirectTo);
-      authUrl.searchParams.set("state", state);
-      authUrl.searchParams.set("scope", "openid profile friendship_status");
-      authUrl.searchParams.set("code_challenge", codeChallenge);
-      authUrl.searchParams.set("code_challenge_method", "S256");
-
-      setStatus("กำลังพาไปที่ LINE...");
-      setStatusTone("info");
-      window.location.href = authUrl.toString();
+      // /auth?next=/some/path → come back there after login (validated in startLineLogin).
+      const returnTo = new URLSearchParams(window.location.search).get("next");
+      await startLineLogin({ returnTo });
     } catch (error) {
       const message = error?.message || "";
       setStatus(message || "ไม่สามารถเชื่อมต่อ LINE ได้");
@@ -51,29 +23,6 @@ export default function AuthPanel() {
     } finally {
       setLoading(false);
     }
-  };
-
-  const generateState = () => {
-    const bytes = new Uint8Array(16);
-    window.crypto.getRandomValues(bytes);
-    return toBase64Url(bytes);
-  };
-
-  const generateCodeVerifier = () => {
-    const bytes = new Uint8Array(32);
-    window.crypto.getRandomValues(bytes);
-    return toBase64Url(bytes);
-  };
-
-  const generateCodeChallenge = async (verifier) => {
-    const data = new TextEncoder().encode(verifier);
-    const hash = await window.crypto.subtle.digest("SHA-256", data);
-    return toBase64Url(new Uint8Array(hash));
-  };
-
-  const toBase64Url = (bytes) => {
-    const base64 = btoa(String.fromCharCode(...bytes));
-    return base64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
   };
 
   return (

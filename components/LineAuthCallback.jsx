@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
+import { consumeLineReturnTo } from "@/lib/auth/line-login";
 
 export default function LineAuthCallback() {
   const searchParams = useSearchParams();
@@ -41,10 +42,15 @@ export default function LineAuthCallback() {
         return res.json();
       })
       .then((payload) => {
-        setStatus("เข้าสู่ระบบด้วย LINE สำเร็จ กำลังพาไปหน้าแรก...");
+        const returnTo = consumeLineReturnTo();
+        setStatus(
+          returnTo
+            ? "เข้าสู่ระบบด้วย LINE สำเร็จ กำลังพากลับไปทำรายการต่อ..."
+            : "เข้าสู่ระบบด้วย LINE สำเร็จ กำลังพาไปหน้าแรก..."
+        );
         setTimeout(() => {
-          window.location.replace("/");
-        }, 800);
+          window.location.replace(returnTo || "/");
+        }, returnTo ? 200 : 800);
       })
       .catch((error) => {
         setStatus(error?.message || "ไม่สามารถเข้าสู่ระบบด้วย LINE ได้");
