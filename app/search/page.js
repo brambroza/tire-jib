@@ -5,6 +5,7 @@ import ProductSection from "@/components/ProductSection";
 import Footer from "@/components/Footer";
 import { products as fallbackProducts } from "@/data/home";
 import { fetchFeaturedProducts, fetchProductsBySkuIds } from "@/lib/supabase/queries";
+import { sortProductsByPriceAsc } from "@/lib/product/card-model.mjs";
 
 export const metadata = {
   title: "ค้นหายาง — สวัสดี จิ๊บจิ๊บ",
@@ -37,8 +38,9 @@ export default async function SearchPage({ searchParams }) {
 
   const safeFetched = Array.isArray(fetchedProducts) ? fetchedProducts : [];
   const hasSearch = Boolean(make || model || brand || size || imageIds.length > 0);
+  // Search results are shown cheapest first (by the price displayed on the card).
   const products = hasSearch
-    ? safeFetched
+    ? sortProductsByPriceAsc(safeFetched)
     : safeFetched.length > 0
       ? safeFetched
       : fallbackProducts;
