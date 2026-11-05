@@ -6,6 +6,10 @@
 --   * carts.slip_url stores null instead of '' when no slip is given
 --   * orders.payment_status starts as 'pending' (รอชำระเงิน) without a slip,
 --     or 'awaiting_verification' when a slip is attached
+--     (cast to the payment_status enum; a bare CASE expression is text and
+--     Postgres rejects it: "column payment_status is of type payment_status")
+--   * install service fee is 0 (was 500): the checkout UI advertises free
+--     installation, so the order total must not add it
 -- Signature is unchanged, so no drop/grant is needed.
 
 create or replace function public.checkout_cart_atomic(
@@ -243,7 +247,8 @@ begin
   from cart_items ci
   where ci.cart_id = v_cart_id;
 
-  v_service_fee := case when p_fulfillment_type = 'install' then 500 else 0 end;
+  -- Home installation is free; the checkout page and order summary show ฿0.
+  v_service_fee := 0;
   if p_fulfillment_type = 'delivery' then
     select ssp.shipping_fee
       into v_province_shipping_fee
@@ -307,10 +312,10 @@ begin
     p_customer_id,
     v_order_no,
     'pending',
-    case
+    (case
       when nullif(btrim(p_slip_path), '') is null then 'pending'
       else 'awaiting_verification'
-    end,
+    end)::payment_status,
     v_grand_total
   )
   returning id, orders.order_no into v_order_id, v_order_no;

@@ -196,9 +196,9 @@ export default function CheckoutFlow({ initialCart, isGuest = false }) {
     }
   }, [initialCart?.cart?.scheduled_at, scheduledDate, scheduledTimeText, availableSlots]);
 
-  const serviceFee = useMemo(() => (fulfillmentType === "install" ? 500 : 0), [
-    fulfillmentType,
-  ]);
+  // Home installation is free (option card says "ฟรี"; order summary shows ฿0).
+  // Keep the variable so the fee preview event and totals stay in one place.
+  const serviceFee = 0;
   const shippingFeeByProvince = useMemo(() => {
     if (!province) return 0;
     const matched = shippingProvinces.find((row) => row.province === province);
