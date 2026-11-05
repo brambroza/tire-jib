@@ -3,7 +3,7 @@ import CheckoutFlow from "@/components/CheckoutFlow";
 import CheckoutOrderSummary from "@/components/CheckoutOrderSummary";
 import { getCustomerAuthContext } from "@/lib/auth/customer";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
-import { CHECKOUT_SITE_ID } from "@/lib/payments/site-payment-account";
+import { CHECKOUT_SITE_ID, fetchSitePaymentAccount } from "@/lib/payments/site-payment-account";
 
 export const metadata = {
   title: "Checkout — สวัสดี จิ๊บจิ๊บ",
@@ -59,7 +59,10 @@ export default async function CheckoutPage() {
     cartData = await fetchActiveCartWithAdmin(admin, auth.customerId);
   }
 
-  const shippingProvinces = await fetchSiteShippingProvinces(CHECKOUT_SITE_ID);
+  const [shippingProvinces, paymentAccount] = await Promise.all([
+    fetchSiteShippingProvinces(CHECKOUT_SITE_ID),
+    fetchSitePaymentAccount(CHECKOUT_SITE_ID),
+  ]);
 
   return (
     <div className="checkout-page">
@@ -82,6 +85,7 @@ export default async function CheckoutPage() {
             <CheckoutFlow
               initialCart={{ ...cartData, shippingProvinces }}
               isGuest={auth.mode === "guest"}
+              paymentAccount={paymentAccount}
             />
           </div>
         </div>

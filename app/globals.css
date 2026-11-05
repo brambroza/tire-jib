@@ -4944,6 +4944,41 @@ textarea.checkout-input {
   font-weight: 600;
 }
 
+.checkout-review-bank {
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+  background: #fff;
+  border-radius: 10px;
+  border: 1px solid rgba(106, 191, 46, 0.35);
+}
+
+.checkout-review-bank-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  font-size: 14px;
+}
+
+.checkout-review-bank-row span {
+  color: var(--ck-ink2);
+  font-size: 13px;
+  width: 84px;
+  flex: 0 0 auto;
+}
+
+.checkout-review-bank-row strong {
+  font-weight: 600;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.checkout-review-bank-number {
+  font-size: 17px;
+  letter-spacing: 0.5px;
+  font-variant-numeric: tabular-nums;
+}
+
 .checkout-review-edit {
   border: 0;
   background: transparent;

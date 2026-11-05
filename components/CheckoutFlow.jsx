@@ -59,12 +59,21 @@ function clearCheckoutIdempotencyKey() {
  * Payment happens after confirmation via LINE, so no slip is collected here.
  * Guests (no login) also enter name + phone; the shop contacts them by phone.
  *
- * @param {{ initialCart: object, isGuest?: boolean }} props
+ * @param {{
+ *   initialCart: object,
+ *   isGuest?: boolean,
+ *   paymentAccount?: { bankName?: string, accountName?: string, accountNumber?: string } | null,
+ * }} props
  */
-export default function CheckoutFlow({ initialCart, isGuest = false }) {
+export default function CheckoutFlow({ initialCart, isGuest = false, paymentAccount = null }) {
   const router = useRouter();
-  const [cart] = useState(initialCart?.cart || null);
-  const [items] = useState(initialCart?.items || []);
+  // Derive from props (not useState) so router.refresh() after a quantity
+  // change or item removal in CheckoutOrderSummary updates totals here too.
+  const cart = initialCart?.cart || null;
+  const items = useMemo(
+    () => (Array.isArray(initialCart?.items) ? initialCart.items : []),
+    [initialCart?.items]
+  );
   const [status, setStatus] = useState("");
   const [saving, setSaving] = useState(false);
 
@@ -768,11 +777,27 @@ export default function CheckoutFlow({ initialCart, isGuest = false }) {
               )}
             </div>
             <div className="checkout-review-note">
-              <b>การชำระเงิน</b>
+              <b>การชำระเงิน ยอดรวม {formatTHB(totalAmount)}</b>
+              {paymentAccount?.accountNumber ? (
+                <div className="checkout-review-bank">
+                  <div className="checkout-review-bank-row">
+                    <span>ธนาคาร</span>
+                    <strong>{paymentAccount.bankName || "-"}</strong>
+                  </div>
+                  <div className="checkout-review-bank-row">
+                    <span>ชื่อบัญชี</span>
+                    <strong>{paymentAccount.accountName || "-"}</strong>
+                  </div>
+                  <div className="checkout-review-bank-row">
+                    <span>เลขที่บัญชี</span>
+                    <strong className="checkout-review-bank-number">{paymentAccount.accountNumber}</strong>
+                  </div>
+                </div>
+              ) : null}
               <span>
                 {isGuest
-                  ? `ยอดรวม ${formatTHB(totalAmount)} ชำระหลังยืนยัน ทางร้านจะโทรแจ้งเลขบัญชีที่เบอร์ที่ให้ไว้`
-                  : `ยอดรวม ${formatTHB(totalAmount)} ชำระหลังยืนยัน ทางร้านจะส่งเลขบัญชีให้ทาง LINE แล้วส่งสลิปกลับในแชทได้เลย`}
+                  ? "โอนหลังยืนยันคำสั่งซื้อ แล้วแจ้งสลิปกับทางร้านทางโทรศัพท์หรือ LINE ทางร้านจะโทรยืนยันที่เบอร์ที่ให้ไว้"
+                  : "โอนหลังยืนยันคำสั่งซื้อ ระบบจะส่งเลขบัญชีนี้ให้ทาง LINE อีกครั้ง แล้วส่งสลิปกลับในแชทได้เลย"}
               </span>
             </div>
           </>
