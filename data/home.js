@@ -50,7 +50,7 @@ export const heroContent = {
   ],
 };
 
-export const searchTabs = ["ตามรุ่นรถ", "ตามขนาดยาง", "ค้นหาด้วยภาพ"];
+export const searchTabs = ["ตามขนาดยาง", "ตามรุ่นรถ", "ค้นหาด้วยภาพ"];
 
 export const searchSelects = [
   {

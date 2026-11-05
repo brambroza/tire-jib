@@ -3,63 +3,17 @@ import CheckoutFlow from "@/components/CheckoutFlow";
 import CheckoutOrderSummary from "@/components/CheckoutOrderSummary";
 import { getCustomerAuthContext } from "@/lib/auth/customer";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
+import { CHECKOUT_SITE_ID } from "@/lib/payments/site-payment-account";
 
 export const metadata = {
   title: "Checkout — สวัสดี จิ๊บจิ๊บ",
 };
 
-const CHECKOUT_SITE_ID = "1df52c4e-2178-400f-9cd6-cb38cf8549a7";
-
-function mapQrCodePath(rawPath, siteId) {
-  if (!rawPath) return "";
-  const trimmed = String(rawPath).trim();
-  if (!trimmed) return "";
-  if (/^https?:\/\//i.test(trimmed)) return trimmed;
-
-  const sanitized = trimmed.replace(/^\/+/, "").replace(/^websitebank\/+/, "");
-  if (!sanitized) return "";
-  if (sanitized.includes("/")) return sanitized;
-  return `${siteId}/${sanitized}`;
-}
-
-async function resolveSiteQrImageUrl(admin, siteId, qrCodeUrl) {
-  const mappedPath = mapQrCodePath(qrCodeUrl, siteId);
-  if (/^https?:\/\//i.test(mappedPath)) return mappedPath;
-
-  if (mappedPath) {
-    const { data } = admin.storage.from("websitebank").getPublicUrl(mappedPath);
-    if (data?.publicUrl) return data.publicUrl;
-  }
-
-  const { data: files } = await admin.storage.from("websitebank").list(siteId, {
-    limit: 1,
-    sortBy: { column: "name", order: "asc" },
-  });
-  const file = files?.[0];
-  if (!file?.name) return "";
-  const { data } = admin.storage.from("websitebank").getPublicUrl(`${siteId}/${file.name}`);
-  return data?.publicUrl || "";
-}
-
-async function fetchSitePaymentAccount(siteId) {
-  const admin = createSupabaseAdminClient();
-  const { data } = await admin
-    .from("site_payment_accounts")
-    .select("account_name, account_number, bank_name, qr_code_url")
-    .eq("site_id", siteId)
-    .maybeSingle();
-
-  if (!data) return null;
-
-  const qrImageUrl = await resolveSiteQrImageUrl(admin, siteId, data.qr_code_url);
-  return {
-    accountName: data.account_name || "",
-    accountNumber: data.account_number || "",
-    bankName: data.bank_name || "",
-    qrImageUrl,
-  };
-}
-
+/**
+ * Load active shipping provinces and their fees for the checkout site.
+ * @param {string} siteId
+ * @returns {Promise<Array<{province: string, shippingFee: number}>>}
+ */
 async function fetchSiteShippingProvinces(siteId) {
   const admin = createSupabaseAdminClient();
   const { data, error } = await admin
@@ -104,12 +58,8 @@ export default async function CheckoutPage() {
     cartData = await fetchActiveCartWithAdmin(admin, auth.customerId);
   }
 
-  const [paymentAccount, shippingProvinces] = await Promise.all([
-    fetchSitePaymentAccount(CHECKOUT_SITE_ID),
-    fetchSiteShippingProvinces(CHECKOUT_SITE_ID),
-  ]);
+  const shippingProvinces = await fetchSiteShippingProvinces(CHECKOUT_SITE_ID);
 
-  
   return (
     <div className="checkout-page">
       <div className="section">
@@ -124,15 +74,11 @@ export default async function CheckoutPage() {
         </div>
         <div className="checkout-grid">
           <div className="checkout-card">
-            <div className="checkout-title">สรุปคำสั่งซื้อ</div>
             <CheckoutOrderSummary initialCart={cartData} />
           </div>
           <div className="checkout-card">
             <div className="checkout-title checkout-title-mobile-hidden">ขั้นตอนการสั่งซื้อ</div>
-            <CheckoutFlow
-              initialCart={{ ...cartData, shippingProvinces }}
-              initialPaymentAccount={paymentAccount}
-            />
+            <CheckoutFlow initialCart={{ ...cartData, shippingProvinces }} />
           </div>
         </div>
       </div>

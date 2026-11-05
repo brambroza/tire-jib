@@ -4,6 +4,7 @@ import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { isTrustedOrigin } from "@/lib/security/request-origin";
 import { queueAndProcessOrderEventNotification } from "@/lib/notifications/jobs";
 import { resolveCustomerPricingGroup } from "@/lib/pricing/customer-group";
+import { fetchSitePaymentAccount } from "@/lib/payments/site-payment-account";
 
 const FULFILLMENT_TYPES = new Set(["install", "delivery"]);
 const PAYMENT_OPTIONS = new Set(["full", "deposit"]);
@@ -175,15 +176,19 @@ export async function PATCH(request) {
       return NextResponse.json({ error: "scheduled_at_too_soon" }, { status: 400 });
     }
 
-    const slipFile = slipPath.split("/").pop() || "";
-    const validSlipFile = /\.(jpg|jpeg|png|webp)$/i.test(slipFile);
-    if (!slipPath || !slipPath.startsWith(`${customerId}/`) || !validSlipFile) {
-      console.log("[checkout-api] return bad request: invalid_slip_path", {
-        customerId,
-        slipPath,
-        validSlipFile,
-      });
-      return NextResponse.json({ error: "invalid_slip_path" }, { status: 400 });
+    // Payment slip is optional at checkout. Customers pay after the order is
+    // confirmed and send the slip via LINE; admin verifies it afterwards.
+    if (slipPath) {
+      const slipFile = slipPath.split("/").pop() || "";
+      const validSlipFile = /\.(jpg|jpeg|png|webp)$/i.test(slipFile);
+      if (!slipPath.startsWith(`${customerId}/`) || !validSlipFile) {
+        console.log("[checkout-api] return bad request: invalid_slip_path", {
+          customerId,
+          slipPath,
+          validSlipFile,
+        });
+        return NextResponse.json({ error: "invalid_slip_path" }, { status: 400 });
+      }
     }
 
     if (fulfillmentType === "delivery") {
@@ -201,11 +206,13 @@ export async function PATCH(request) {
     console.log("[checkout-api] using admin supabase client for checkout flow", {
       authMode: auth.mode,
     });
-    const hasOwnedSlip = await verifySlipOwnership(supabase, customerId, slipPath);
-    console.log("[checkout-api] verifySlipOwnership", { customerId, slipPath, hasOwnedSlip });
-    if (!hasOwnedSlip) {
-      console.log("[checkout-api] return bad request: slip_not_found");
-      return NextResponse.json({ error: "slip_not_found" }, { status: 400 });
+    if (slipPath) {
+      const hasOwnedSlip = await verifySlipOwnership(supabase, customerId, slipPath);
+      console.log("[checkout-api] verifySlipOwnership", { customerId, slipPath, hasOwnedSlip });
+      if (!hasOwnedSlip) {
+        console.log("[checkout-api] return bad request: slip_not_found");
+        return NextResponse.json({ error: "slip_not_found" }, { status: 400 });
+      }
     }
 
     const { error: updateCartError } = await supabase
@@ -244,7 +251,7 @@ export async function PATCH(request) {
       p_customer_id: customerId,
       p_fulfillment_type: fulfillmentType,
       p_scheduled_at: scheduledAt,
-      p_slip_path: slipPath,
+      p_slip_path: slipPath || null,
       p_address: address,
       p_province: province,
       p_location_lat: Number.isNaN(locationLat) ? null : locationLat,
@@ -282,11 +289,14 @@ export async function PATCH(request) {
     const grandTotal = Number(row.grand_total || 0);
     const depositAmount = 500;
     const payNowAmount = paymentOption === "deposit" ? depositAmount : grandTotal;
+    // No slip yet means the customer still has to pay; a slip means admin must verify it.
+    const paymentStatus = slipPath ? "awaiting_verification" : "pending";
 
     const { error: updateOrderError } = await supabase
       .from("orders")
       .update({
         payment_option: paymentOption,
+        payment_status: paymentStatus,
         deposit_amount: paymentOption === "deposit" ? depositAmount : 0,
         pay_now_amount: payNowAmount,
         datetrans: dateTrans,
@@ -324,12 +334,35 @@ export async function PATCH(request) {
         customerId,
         orderId: row.order_id,
       });
+      const paymentAccount = slipPath ? null : await fetchSitePaymentAccount().catch(() => null);
       notificationResult = await queueAndProcessOrderEventNotification({
         supabase,
         eventType: "order_confirmed",
         customerId,
         orderId: row.order_id,
         dedupeKey: `${customerId}:${idempotencyKey}:order_confirmed`,
+        details: {
+          fulfillmentType,
+          address,
+          province,
+          dateTrans,
+          timeTrans,
+          paymentOption,
+          totals: {
+            item_subtotal: Number(row.items_total || 0),
+            service_fee: Number(row.service_fee || 0),
+            shipping_fee: Number(row.shipping_fee || 0),
+            grand_total: grandTotal,
+            pay_now_amount: payNowAmount,
+          },
+          paymentAccount: paymentAccount
+            ? {
+                bankName: paymentAccount.bankName,
+                accountName: paymentAccount.accountName,
+                accountNumber: paymentAccount.accountNumber,
+              }
+            : null,
+        },
       });
       console.log("[checkout-api] queue notification result", notificationResult);
       if (!notificationResult?.queued) {
@@ -349,7 +382,7 @@ export async function PATCH(request) {
         id: row.order_id,
         order_no: row.order_no,
         status: "pending",
-        payment_status: "awaiting_verification",
+        payment_status: paymentStatus,
       },
       totals: {
         items_total: Number(row.items_total || 0),

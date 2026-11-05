@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { formatTHB } from "@/lib/utils/format";
 
@@ -53,22 +53,16 @@ function clearCheckoutIdempotencyKey() {
   window.sessionStorage.removeItem(CHECKOUT_IDEMPOTENCY_STORAGE_KEY);
 }
 
-export default function CheckoutFlow({ initialCart, initialPaymentAccount }) {
-  const normalizePaymentOption = (value) => (value === "deposit" ? "deposit" : "full");
+/**
+ * Multi-step checkout: service type, location, schedule (install only), confirm.
+ * Payment happens after confirmation via LINE, so no slip is collected here.
+ */
+export default function CheckoutFlow({ initialCart }) {
   const router = useRouter();
   const [cart] = useState(initialCart?.cart || null);
   const [items] = useState(initialCart?.items || []);
   const [status, setStatus] = useState("");
   const [saving, setSaving] = useState(false);
-  const [uploading, setUploading] = useState(false);
-  const initialSlipValue =
-    typeof initialCart?.cart?.slip_url === "string" ? initialCart.cart.slip_url : "";
-  const [slipPath, setSlipPath] = useState(
-    initialSlipValue.startsWith("http") ? "" : initialSlipValue
-  );
-  const [slipUrl, setSlipUrl] = useState(
-    initialSlipValue.startsWith("http") ? initialSlipValue : ""
-  );
 
   const [fulfillmentType, setFulfillmentType] = useState(
     initialCart?.cart?.fulfillment_type || "install"
@@ -110,17 +104,9 @@ export default function CheckoutFlow({ initialCart, initialPaymentAccount }) {
       ? String(initialCart.cart.location_lon)
       : ""
   );
-  const paymentAccount = initialPaymentAccount || null;
-  const qrImage = paymentAccount?.qrImageUrl || "";
-  const [paymentOption, setPaymentOption] = useState(
-    normalizePaymentOption(initialCart?.cart?.payment_option)
-  );
   const [step, setStep] = useState(1);
   const [submitAttemptStep, setSubmitAttemptStep] = useState(0);
   const [confirmAttempted, setConfirmAttempted] = useState(false);
-  const [dragActive, setDragActive] = useState(false);
-  const [uploadedFileName, setUploadedFileName] = useState("");
-  const fileInputRef = useRef(null);
   const minScheduleDate = useMemo(
     () => formatDateInBangkok(new Date(Date.now() + 24 * 60 * 60 * 1000)),
     []
@@ -225,8 +211,6 @@ export default function CheckoutFlow({ initialCart, initialPaymentAccount }) {
     return shippingFeeByProvince;
   }, [fulfillmentType, hasSelectedProvince, initialShippingFee, shippingFeeByProvince]);
   const totalAmount = itemsTotal + serviceFee + shippingFee;
-  const depositAmount = 500;
-  const payNowAmount = paymentOption === "deposit" ? depositAmount : totalAmount;
 
   useEffect(() => {
     window.dispatchEvent(
@@ -240,6 +224,17 @@ export default function CheckoutFlow({ initialCart, initialPaymentAccount }) {
     );
   }, [fulfillmentType, serviceFee, shippingFee]);
 
+  useEffect(() => {
+    window.dispatchEvent(new CustomEvent("checkout:step-change", { detail: { step } }));
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }, [step]);
+
+  useEffect(() => {
+    // Lets global fixed elements (LINE float button) clear the sticky action bar on mobile.
+    document.body.classList.add("has-checkout-bar");
+    return () => document.body.classList.remove("has-checkout-bar");
+  }, []);
+
   const handleSave = async () => {
     setSaving(true);
     setStatus("");
@@ -249,8 +244,6 @@ export default function CheckoutFlow({ initialCart, initialPaymentAccount }) {
         idempotencyKey,
         fulfillmentType,
         scheduledAt,
-        slipPath,
-        paymentOption,
       });
       const res = await fetch("/api/cart/checkout", {
         method: "PATCH",
@@ -263,12 +256,11 @@ export default function CheckoutFlow({ initialCart, initialPaymentAccount }) {
           scheduled_at: scheduledAt ? `${scheduledAt}:00+07:00` : null,
           datetrans: scheduledDate || null,
           timetrans: scheduledTimeText || null,
-          slip_path: slipPath || null,
           address: address || null,
           province: province || null,
           location_lat: lat ? Number(lat) : null,
           location_lon: lon ? Number(lon) : null,
-          payment_option: paymentOption,
+          payment_option: "full",
           idempotency_key: idempotencyKey,
         }),
       });
@@ -279,7 +271,7 @@ export default function CheckoutFlow({ initialCart, initialPaymentAccount }) {
         throw new Error(payload?.detail || payload?.error || "save_failed");
       }
       clearCheckoutIdempotencyKey();
-      setStatus("ยืนยันคำสั่งซื้อเรียบร้อย กำลังพาไปหน้าสถานะคำสั่งซื้อ...");
+      setStatus("รับคำสั่งซื้อแล้ว ส่งสรุปและช่องทางชำระเงินไปที่ LINE ของคุณ กำลังพาไปหน้าสถานะคำสั่งซื้อ...");
       setTimeout(() => {
         router.push("/orders");
       }, 800);
@@ -290,70 +282,34 @@ export default function CheckoutFlow({ initialCart, initialPaymentAccount }) {
     }
   };
 
-  const uploadSlip = async (file) => {
-    if (!file) return;
-    if (!file.type?.startsWith("image/")) {
-      setStatus("กรุณาเลือกไฟล์รูปภาพเท่านั้น");
-      return;
-    }
-    setUploading(true);
-    setStatus("กำลังอัปโหลดสลิป...");
-    try {
-      const formData = new FormData();
-      formData.append("slip", file);
-      const res = await fetch("/api/cart/slip", { method: "POST", body: formData });
-      const payload = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        throw new Error(payload?.detail || payload?.error || "upload_failed");
-      }
-      setSlipPath(payload.path || "");
-      setSlipUrl(payload.preview_url || "");
-      setUploadedFileName(file.name || "");
-      setStatus(payload.path ? `อัปโหลดสลิปเรียบร้อย (${payload.path})` : "อัปโหลดสลิปเรียบร้อย");
-    } catch (error) {
-      setStatus(error?.message || "อัปโหลดสลิปไม่สำเร็จ");
-    } finally {
-      setUploading(false);
-    }
-  };
-
-  const handleUpload = async (event) => {
-    const file = event.target.files?.[0];
-    await uploadSlip(file);
-    event.target.value = "";
-  };
-
   if (!cart || items.length === 0) {
     return <div className="checkout-placeholder">ยังไม่มีสินค้าในตะกร้า</div>;
   }
 
   const isShippingOnly = fulfillmentType === "delivery";
   const nextStep = () =>
-    setStep((current) => (isShippingOnly && current === 3 ? 5 : Math.min(current + 1, 5)));
+    setStep((current) => (isShippingOnly && current === 2 ? 4 : Math.min(current + 1, 4)));
   const prevStep = () =>
-    setStep((current) => (isShippingOnly && current === 5 ? 3 : Math.max(current - 1, 1)));
+    setStep((current) => (isShippingOnly && current === 4 ? 2 : Math.max(current - 1, 1)));
   const needsLocation = Boolean(fulfillmentType);
   const provinceRequired = needsLocation && shippingProvinces.length > 0;
   const hasProvince = !provinceRequired || Boolean(province.trim());
   const hasLocation = Boolean(address.trim()); // && Boolean(lat) && Boolean(lon)
   const canConfirm =
-    Boolean(slipPath) &&
     (isShippingOnly || Boolean(scheduledAt)) &&
     (!needsLocation || (hasProvince && hasLocation));
   const canNext =
     (step === 1 && Boolean(fulfillmentType)) ||
-    (step === 2 && Boolean(slipPath)) ||
-    (step === 3 && (!needsLocation || (hasProvince && hasLocation))) ||
-    (step === 4 && Boolean(scheduledAt)) ||
-    step === 5;
+    (step === 2 && (!needsLocation || (hasProvince && hasLocation))) ||
+    (step === 3 && Boolean(scheduledAt)) ||
+    step === 4;
 
   const showStepErrors = submitAttemptStep === step || confirmAttempted;
   const provinceError = showStepErrors && provinceRequired && !province.trim();
   const addressError = showStepErrors && needsLocation && !address.trim();
   const latError = showStepErrors && needsLocation && !lat.trim();
   const lonError = showStepErrors && needsLocation && !lon.trim();
-  const dateTimeError = showStepErrors && !isShippingOnly && step === 4 && !scheduledAt;
-  const slipError = showStepErrors && step === 2 && !slipPath;
+  const dateTimeError = showStepErrors && !isShippingOnly && step === 3 && !scheduledAt;
 
   const handleNextStep = () => {
     if (!canNext) {
@@ -400,119 +356,182 @@ export default function CheckoutFlow({ initialCart, initialPaymentAccount }) {
     }
   };
 
-  const openFilePicker = () => {
-    if (uploading) return;
-    if (fileInputRef.current) {
-      fileInputRef.current.value = "";
+  const STEP_LABELS = { 1: "เลือกบริการ", 2: "สถานที่", 3: "วันเวลา", 4: "ยืนยัน" };
+  const visibleSteps = [1, 2, 3, 4].filter((num) => !isShippingOnly || num !== 3);
+  const stepIndex = Math.max(0, visibleSteps.indexOf(step));
+  const isLastStep = step === 4;
+  const nextStepLabel = STEP_LABELS[visibleSteps[stepIndex + 1]] || "";
+
+  const handleConfirm = () => {
+    setConfirmAttempted(true);
+    if (!canConfirm) {
+      setStatus("กรุณากรอกข้อมูลที่จำเป็นให้ครบก่อนยืนยัน");
+      return;
     }
-    fileInputRef.current?.click();
+    handleSave();
   };
 
-  const onDrop = async (event) => {
-    event.preventDefault();
-    setDragActive(false);
-    if (uploading) return;
-    const file = event.dataTransfer?.files?.[0];
-    await uploadSlip(file);
-  };
+  const renderOption = ({ active, onClick, title, sub, right, tag }) => (
+    <button
+      type="button"
+      role="radio"
+      aria-checked={active}
+      className={`checkout-opt ${active ? "active" : ""}`}
+      onClick={onClick}
+    >
+      <span className="checkout-opt-radio">
+        <i />
+      </span>
+      <span className="checkout-opt-text">
+        <b>
+          {title}
+          {tag ? <span className="checkout-tag">{tag}</span> : null}
+        </b>
+        {sub ? <small>{sub}</small> : null}
+      </span>
+      {right ? <span className="checkout-opt-right">{right}</span> : null}
+    </button>
+  );
 
   return (
     <div className="checkout-flow">
+      <div className="checkout-progress" aria-live="polite">
+        <div className="checkout-progress-text">
+          ขั้นตอน {stepIndex + 1} จาก {visibleSteps.length} · {STEP_LABELS[step]}
+        </div>
+        <div className="checkout-progress-bar">
+          <i style={{ width: `${((stepIndex + 1) / visibleSteps.length) * 100}%` }} />
+        </div>
+      </div>
+
       <div className="checkout-stepper">
-        {[1, 2, 3, 4, 5]
-          .filter((num) => !isShippingOnly || num !== 4)
-          .map((num) => (
+        {visibleSteps.map((num) => (
           <div
             key={num}
-            className={`checkout-stepper-item ${step === num ? "active" : ""} ${step > num ? "done" : ""
-              }`}
+            className={`checkout-stepper-item ${step === num ? "active" : ""} ${step > num ? "done" : ""}`}
           >
-            <div className="checkout-stepper-label">
-              {num === 1 && "บริการ"}
-              {num === 2 && "ชำระเงิน"}
-              {num === 3 && "สถานที่"}
-              {num === 4 && "วันเวลา"}
-              {num === 5 && "ยืนยัน"}
-            </div>
+            <div className="checkout-stepper-label">{STEP_LABELS[num]}</div>
           </div>
-          ))}
+        ))}
       </div>
 
       <div className="checkout-steps-box">
         {step === 1 && (
           <>
             <div className="checkout-step-title">เลือกรับบริการ</div>
-            <div className="checkout-choice">
-
-              <button
-                type="button"
-                className={`checkout-chip ${fulfillmentType === "install" ? "active" : ""}`}
-                onClick={() => {
+            <div className="checkout-choice" role="radiogroup" aria-label="รูปแบบการรับบริการ">
+              {renderOption({
+                active: fulfillmentType === "install",
+                onClick: () => {
                   setFulfillmentType("install");
                   setProvince((current) => (current === "ต่างจังหวัด" ? "" : current));
-                }}
-              >
-                ติดตั้งฟรี กรุงเทพฯปริมณฑล
-              </button>
-              <button
-                type="button"
-                className={`checkout-chip ${fulfillmentType === "delivery" ? "active" : ""}`}
-                onClick={() => {
+                },
+                title: "ติดตั้งที่ร้าน",
+                sub: "กรุงเทพฯ และปริมณฑล · จองคิวช่างได้เลย",
+                right: "ฟรี",
+              })}
+              {renderOption({
+                active: fulfillmentType === "delivery",
+                onClick: () => {
                   setFulfillmentType("delivery");
                   setProvince("ต่างจังหวัด");
-                }}
-              >
-                ส่งฟรีต่างจังหวัด
-              </button>
+                },
+                title: "ส่งถึงบ้าน",
+                sub: "ต่างจังหวัด · ส่งผ่านขนส่ง",
+                right: "ฟรี",
+              })}
             </div>
           </>
         )}
 
-        {step === 3 && (
+        {step === 2 && (
           <>
             <div className="checkout-step-title">
-              {isShippingOnly ? "สถานที่จัดส่ง" : "เลือกสถานที่ติดตั้ง"}
+              {isShippingOnly ? "ที่อยู่จัดส่ง" : "สถานที่รับบริการ"}
             </div>
-            <div className="checkout-note">
+            <div className="checkout-hint">
               {isShippingOnly
                 ? "กรุณาระบุที่อยู่และเบอร์โทรสำหรับจัดส่ง"
-                : "กรุณาระบุที่อยู่และตำแหน่งสำหรับเข้ารับบริการติดตั้ง"}
+                : "ช่างจะโทรยืนยันก่อนถึงเวลานัด"}
             </div>
-            <select
-              className={`checkout-input ${provinceError ? "input-error" : ""}`}
-              value={province}
-              onChange={(event) => setProvince(event.target.value)}
-              disabled={!shippingProvinces.length && !isShippingOnly}
-            >
-              <option value="">
-                {shippingProvinces.length ? "เลือกจังหวัด" : "ยังไม่มีข้อมูลจังหวัด (ค่าส่งฐาน 0)"}
-              </option>
-              {isShippingOnly && !shippingProvinces.some((item) => item.province === "ต่างจังหวัด") ? (
-                <option value="ต่างจังหวัด">ต่างจังหวัด</option>
-              ) : null}
-              {shippingProvinces.map((item) => (
-                <option key={item.province} value={item.province}>
-                  {item.province}
+            <div className="checkout-field">
+              <label htmlFor="checkout-province">จังหวัด</label>
+              <select
+                id="checkout-province"
+                className={`checkout-input ${provinceError ? "input-error" : ""}`}
+                value={province}
+                onChange={(event) => setProvince(event.target.value)}
+                disabled={!shippingProvinces.length && !isShippingOnly}
+              >
+                <option value="">
+                  {shippingProvinces.length ? "เลือกจังหวัด" : "ยังไม่มีข้อมูลจังหวัด (ค่าส่งฐาน 0)"}
                 </option>
-              ))}
-            </select>
-            {provinceError && <div className="checkout-input-error">กรุณาเลือกจังหวัด</div>}
-            <textarea
-              className={`checkout-input ${addressError ? "input-error" : ""}`}
-              rows={3}
-              placeholder={isShippingOnly ? "ที่อยู่และเบอร์โทร" : "ที่อยู่สำหรับติดตั้ง"}
-              value={address}
-              onChange={(event) => setAddress(event.target.value)}
-            />
-            {addressError && (
-              <div className="checkout-input-error">
-                {isShippingOnly
-                  ? "กรุณากรอกที่อยู่และเบอร์โทรสำหรับจัดส่ง"
-                  : "กรุณากรอกที่อยู่สำหรับติดตั้ง"}
-              </div>
-            )}
+                {isShippingOnly && !shippingProvinces.some((item) => item.province === "ต่างจังหวัด") ? (
+                  <option value="ต่างจังหวัด">ต่างจังหวัด</option>
+                ) : null}
+                {shippingProvinces.map((item) => (
+                  <option key={item.province} value={item.province}>
+                    {item.province}
+                  </option>
+                ))}
+              </select>
+              {provinceError && <div className="checkout-input-error">กรุณาเลือกจังหวัด</div>}
+            </div>
+            <div className="checkout-field">
+              <label htmlFor="checkout-address">ที่อยู่</label>
+              <textarea
+                id="checkout-address"
+                className={`checkout-input ${addressError ? "input-error" : ""}`}
+                rows={3}
+                placeholder={
+                  isShippingOnly
+                    ? "บ้านเลขที่ ซอย ถนน ตำบล อำเภอ และเบอร์โทร"
+                    : "บ้านเลขที่ ซอย ถนน แขวง เขต"
+                }
+                value={address}
+                onChange={(event) => setAddress(event.target.value)}
+              />
+              {addressError && (
+                <div className="checkout-input-error">
+                  {isShippingOnly
+                    ? "กรุณากรอกที่อยู่และเบอร์โทรสำหรับจัดส่ง"
+                    : "กรุณากรอกที่อยู่สำหรับติดตั้ง"}
+                </div>
+              )}
+            </div>
             {!isShippingOnly ? (
               <>
+                <div className="checkout-location-actions">
+                  <button className="checkout-btn-soft" type="button" onClick={handleUseMyLocation}>
+                    ใช้ตำแหน่งปัจจุบัน
+                  </button>
+                  <a
+                    className="checkout-btn-soft"
+                    href="https://www.google.com/maps"
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    เลือกจาก Google Maps
+                  </a>
+                </div>
+                <div className="checkout-field">
+                  <label htmlFor="checkout-map-url">วางลิงก์ Google Maps ที่คัดลอกมา</label>
+                  <input
+                    id="checkout-map-url"
+                    className="checkout-input"
+                    placeholder="https://maps.google.com/..."
+                    value={mapUrl}
+                    onChange={(event) => {
+                      const value = event.target.value;
+                      setMapUrl(value);
+                      const parsed = parseMapUrl(value);
+                      if (parsed) {
+                        setLat(parsed.lat);
+                        setLon(parsed.lon);
+                      }
+                    }}
+                  />
+                </div>
                 <div className="checkout-location-row">
                   <input
                     className={`checkout-input ${latError ? "input-error" : ""}`}
@@ -534,251 +553,154 @@ export default function CheckoutFlow({ initialCart, initialPaymentAccount }) {
                     กรุณาระบุละติจูดและลองจิจูดให้ครบ
                   </div>
                 )}
-                <div className="checkout-location-actions">
-                  <button
-                    className="checkout-btn ghost"
-                    type="button"
-                    onClick={handleUseMyLocation}
+                {lat && lon && (
+                  <a
+                    className="checkout-map-link"
+                    href={`https://www.google.com/maps?q=${encodeURIComponent(lat)},${encodeURIComponent(lon)}`}
+                    target="_blank"
+                    rel="noreferrer"
                   >
-                    ใช้ตำแหน่งปัจจุบัน
-                  </button>
-                  {lat && lon && (
-                    <a
-                      className="checkout-map-link"
-                      href={`https://www.google.com/maps?q=${encodeURIComponent(lat)},${encodeURIComponent(lon)}`}
-                      target="_blank"
-                      rel="noreferrer"
-                    >
-                      เปิดบน Google Maps
-                    </a>
-                  )}
-                </div>
-                <div className="checkout-location-divider">หรือเลือกจาก Google Maps</div>
-                <a
-                  className="checkout-map-link"
-                  href="https://www.google.com/maps"
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  เปิด Google Maps เพื่อเลือกตำแหน่ง
-                </a>
-                <input
-                  className="checkout-input"
-                  placeholder="วางลิงก์ Google Maps ที่คัดลอกมา"
-                  value={mapUrl}
-                  onChange={(event) => {
-                    const value = event.target.value;
-                    setMapUrl(value);
-                    const parsed = parseMapUrl(value);
-                    if (parsed) {
-                      setLat(parsed.lat);
-                      setLon(parsed.lon);
-                    }
-                  }}
-                />
+                    ตรวจสอบตำแหน่งบน Google Maps
+                  </a>
+                )}
               </>
             ) : null}
           </>
         )}
 
-        {step === 4 && (
+        {step === 3 && (
           <>
             <div className="checkout-step-title">เลือกวันและเวลา</div>
-            <input
-              className={`checkout-input ${dateTimeError ? "input-error" : ""}`}
-              type="date"
-              value={scheduledDate}
-              min={minScheduleDate}
-              onChange={(event) => {
-                setScheduledDate(event.target.value);
-                setScheduledTimeText("");
-              }}
-            />
-            <select
-              className={`checkout-input ${dateTimeError ? "input-error" : ""}`}
-              value={scheduledTimeText}
-              onChange={(event) => setScheduledTimeText(event.target.value)}
-              disabled={!scheduledDate || loadingSlots}
-            >
-              <option value="">
-                {!scheduledDate
-                  ? "เลือกวันก่อน"
-                  : loadingSlots
-                    ? "กำลังโหลดช่วงเวลา..."
-                    : availableSlots.length
-                      ? "เลือกช่วงเวลา"
-                      : "ไม่มีช่วงเวลาว่าง"}
-              </option>
-              {availableSlots.map((slot) => (
-                <option key={slot.timetrans} value={slot.timetrans}>
-                  {slot.timetrans}
+            <div className="checkout-hint">เลือกได้ตั้งแต่วันพรุ่งนี้เป็นต้นไป</div>
+            <div className="checkout-field">
+              <label htmlFor="checkout-date">วันที่</label>
+              <input
+                id="checkout-date"
+                className={`checkout-input ${dateTimeError ? "input-error" : ""}`}
+                type="date"
+                value={scheduledDate}
+                min={minScheduleDate}
+                onChange={(event) => {
+                  setScheduledDate(event.target.value);
+                  setScheduledTimeText("");
+                }}
+              />
+            </div>
+            <div className="checkout-field">
+              <label htmlFor="checkout-time">ช่วงเวลา</label>
+              <select
+                id="checkout-time"
+                className={`checkout-input ${dateTimeError ? "input-error" : ""}`}
+                value={scheduledTimeText}
+                onChange={(event) => setScheduledTimeText(event.target.value)}
+                disabled={!scheduledDate || loadingSlots}
+              >
+                <option value="">
+                  {!scheduledDate
+                    ? "เลือกวันก่อน"
+                    : loadingSlots
+                      ? "กำลังโหลดช่วงเวลา..."
+                      : availableSlots.length
+                        ? "เลือกช่วงเวลา"
+                        : "ไม่มีช่วงเวลาว่าง"}
                 </option>
-              ))}
-            </select>
+                {availableSlots.map((slot) => (
+                  <option key={slot.timetrans} value={slot.timetrans}>
+                    {slot.timetrans}
+                  </option>
+                ))}
+              </select>
+            </div>
             {dateTimeError && (
               <div className="checkout-input-error">กรุณาเลือกวันและเวลาให้ครบ</div>
             )}
           </>
         )}
 
-        {step === 2 && (
+        {step === 4 && (
           <>
-            <div className="checkout-step-title">รูปแบบการชำระเงิน</div>
-            <div className="checkout-choice">
-              <button
-                type="button"
-                className={`checkout-chip ${paymentOption === "deposit" ? "active" : ""}`}
-                onClick={() => setPaymentOption("deposit")}
-              >
-                ค่ามัดจำ {formatTHB(depositAmount)}
-              </button>
-              <button
-                type="button"
-                className={`checkout-chip ${paymentOption === "full" ? "active" : ""}`}
-                onClick={() => setPaymentOption("full")}
-              >
-                ชำระเต็มจำนวน
-              </button>
+            <div className="checkout-step-title">ตรวจสอบก่อนยืนยัน</div>
+            <div className="checkout-hint">
+              หลังยืนยัน ระบบจะส่งสรุปคำสั่งซื้อและช่องทางชำระเงินให้ทาง LINE
             </div>
-
-            <div className="checkout-step-title">ข้อมูลบัญชีสำหรับโอนเงิน(โอนบัญชีนี้เท่านั้น)</div>
-            {paymentAccount ? (
-              <div className="checkout-payment-account">
-                <div className="checkout-payment-row">
-                  <span>ชื่อบัญชี</span>
-                  <strong>{paymentAccount.accountName || "-"}</strong>
-                </div>
-                <div className="checkout-payment-row">
-                  <span>เลขที่บัญชี</span>
-                  <strong>{paymentAccount.accountNumber || "-"}</strong>
-                </div>
-                <div className="checkout-payment-row">
-                  <span>ธนาคาร</span>
-                  <strong>{paymentAccount.bankName || "-"}</strong>
-                </div>
+            <div className="checkout-review">
+              <div className="checkout-review-row">
+                <span>บริการ</span>
+                <b>
+                  {isShippingOnly ? "ส่งถึงบ้าน ต่างจังหวัด" : "ติดตั้งที่ร้าน กรุงเทพฯ"}
+                  <button type="button" className="checkout-review-edit" onClick={() => setStep(1)}>
+                    แก้ไข
+                  </button>
+                </b>
               </div>
-            ) : (
-              <div className="checkout-qr-placeholder">ยังไม่พบข้อมูลบัญชีสำหรับชำระเงิน</div>
-            )}
-            <div className="checkout-step-title">ชำระเงินผ่าน QR</div>
-            {qrImage ? (
-              <img className="checkout-qr" src={qrImage} alt="QR ชำระเงิน" />
-            ) : (
-              <div className="checkout-qr-placeholder">กรุณาเพิ่ม QR สำหรับชำระเงิน</div>
-            )}
-            <div className="checkout-step-title">แนบสลิปการชำระเงิน</div>
-            <input
-              ref={fileInputRef}
-              className="checkout-file-input"
-              type="file"
-              accept="image/*"
-              onChange={handleUpload}
-              disabled={uploading}
-            />
-            <div
-              className={`checkout-upload-dropzone ${dragActive ? "drag-active" : ""} ${slipError ? "input-error" : ""
-                }`}
-              onDragEnter={(event) => {
-                event.preventDefault();
-                if (!uploading) setDragActive(true);
-              }}
-              onDragOver={(event) => {
-                event.preventDefault();
-                if (!uploading) setDragActive(true);
-              }}
-              onDragLeave={(event) => {
-                event.preventDefault();
-                setDragActive(false);
-              }}
-              onDrop={onDrop}
-            >
-              <div className="checkout-upload-icon">⬆</div>
-              <div className="checkout-upload-title">
-                {uploading ? "กำลังอัปโหลด..." : "ลากไฟล์สลิปมาวางที่นี่"}
+              <div className="checkout-review-row">
+                <span>{isShippingOnly ? "ที่อยู่ส่ง" : "สถานที่"}</span>
+                <b className={address.trim() ? "" : "is-missing"}>
+                  {[province, address.trim()].filter(Boolean).join(" · ") || "ยังไม่ระบุ"}
+                  <button type="button" className="checkout-review-edit" onClick={() => setStep(2)}>
+                    แก้ไข
+                  </button>
+                </b>
               </div>
-              <div className="checkout-upload-sub">หรือกดปุ่มด้านล่างเพื่อเลือกไฟล์รูปภาพ</div>
-              <button
-                className="checkout-upload-btn"
-                type="button"
-                onClick={openFilePicker}
-                disabled={uploading}
-              >
-                เลือกไฟล์สลิป
-              </button>
-              {uploadedFileName && (
-                <div className="checkout-upload-file">ไฟล์ล่าสุด: {uploadedFileName}</div>
+              {!isShippingOnly && (
+                <div className="checkout-review-row">
+                  <span>วันเวลา</span>
+                  <b className={scheduledAt ? "" : "is-missing"}>
+                    {scheduledAt ? `${scheduledDate} · ${scheduledTimeText}` : "ยังไม่เลือก"}
+                    <button type="button" className="checkout-review-edit" onClick={() => setStep(3)}>
+                      แก้ไข
+                    </button>
+                  </b>
+                </div>
               )}
             </div>
-            {slipError && (
-              <div className="checkout-input-error">กรุณาอัปโหลดสลิปการชำระเงิน</div>
-            )}
-            {slipUrl && (
-              <a className="checkout-slip" href={slipUrl} target="_blank" rel="noreferrer">
-                ดูสลิปที่อัปโหลด
-              </a>
-            )}
-            {!slipUrl && slipPath && (
-              <div className="checkout-slip">แนบสลิปแล้ว</div>
-            )}
-          </>
-        )}
-
-        {step === 5 && (
-          <>
-            <div className="checkout-step-title">ยืนยันการชำระเงิน</div>
-            <div className="checkout-confirm">
-              กรุณาตรวจสอบข้อมูลก่อนยืนยัน ระบบจะส่งรายการให้แอดมินตรวจสอบสลิป
+            <div className="checkout-review-note">
+              <b>การชำระเงิน</b>
+              <span>ยอดรวม {formatTHB(totalAmount)} ชำระหลังยืนยัน ทางร้านจะส่งเลขบัญชีให้ทาง LINE แล้วส่งสลิปกลับในแชทได้เลย</span>
             </div>
           </>
         )}
 
-        <div className="checkout-step-actions">
-          <button className="checkout-btn ghost" type="button" onClick={prevStep} disabled={step === 1}>
-            ย้อนกลับ
-          </button>
-          {step < 5 ? (
-            <button className="checkout-btn" type="button" onClick={handleNextStep}>
-              {step === 1 ? "ชำระเงิน" : "ยืนยัน"}
-            </button>
-          ) : (
-            <button
-              className="checkout-btn"
-              type="button"
-              onClick={() => {
-                setConfirmAttempted(true);
-                if (!canConfirm) {
-                  setStatus("กรุณากรอกข้อมูลที่จำเป็นให้ครบก่อนยืนยัน");
-                  return;
-                }
-                handleSave();
-              }}
-              disabled={saving}
-            >
-              {saving ? "กำลังบันทึก..." : "ยืนยันคำสั่งซื้อ"}
-            </button>
-          )}
-        </div>
         {status && (
           <div className="checkout-status" role="status" aria-live="polite">
             {status}
           </div>
         )}
-      </div>
 
-      {/* <div className="checkout-summary">
-        <div className="checkout-summary-row">
-          <span>ยอดสุทธิที่ต้องชำระ</span>
-          <strong>{formatTHB(totalAmount)}</strong>
+        <div className="checkout-step-actions">
+          <button
+            className="checkout-back-btn"
+            type="button"
+            onClick={prevStep}
+            disabled={step === 1 || saving}
+            aria-label="ย้อนกลับ"
+          >
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M15 18l-6-6 6-6" />
+            </svg>
+          </button>
+          {!isLastStep ? (
+            <button className="checkout-cta" type="button" onClick={handleNextStep}>
+              <span>ถัดไป: {nextStepLabel}</span>
+              <small>
+                {step === 1
+                  ? `${items.length} รายการ · ${formatTHB(totalAmount)}`
+                  : formatTHB(totalAmount)}
+              </small>
+            </button>
+          ) : (
+            <button
+              className="checkout-cta dark"
+              type="button"
+              onClick={handleConfirm}
+              disabled={saving}
+            >
+              <span>{saving ? "กำลังบันทึก..." : "ยืนยันคำสั่งซื้อ"}</span>
+              <small>{formatTHB(totalAmount)}</small>
+            </button>
+          )}
         </div>
-        <div className="checkout-summary-row">
-          <span>ยอดที่ต้องโอนตอนนี้</span>
-          <strong>{formatTHB(payNowAmount)}</strong>
-        </div>
-        <div className="checkout-note">
-          หลังจากยืนยันแล้ว แอดมินจะตรวจสอบสลิปและยืนยันคำสั่งซื้อในระบบหลังบ้าน
-        </div>
-        {status && <div className="checkout-status">{status}</div>}
-      </div> */}
+      </div>
     </div>
   );
 }
