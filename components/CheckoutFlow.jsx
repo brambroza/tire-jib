@@ -426,7 +426,7 @@ export default function CheckoutFlow({ initialCart }) {
                   setFulfillmentType("install");
                   setProvince((current) => (current === "ต่างจังหวัด" ? "" : current));
                 },
-                title: "ติดตั้งที่ร้าน",
+                title: "ติดตั้งที่บ้าน",
                 sub: "กรุงเทพฯ และปริมณฑล · จองคิวช่างได้เลย",
                 right: "ฟรี",
               })}
@@ -627,7 +627,7 @@ export default function CheckoutFlow({ initialCart }) {
               <div className="checkout-review-row">
                 <span>บริการ</span>
                 <b>
-                  {isShippingOnly ? "ส่งถึงบ้าน ต่างจังหวัด" : "ติดตั้งที่ร้าน กรุงเทพฯ"}
+                  {isShippingOnly ? "ส่งถึงบ้าน ต่างจังหวัด" : "ติดตั้งที่บ้าน กรุงเทพฯ"}
                   <button type="button" className="checkout-review-edit" onClick={() => setStep(1)}>
                     แก้ไข
                   </button>
